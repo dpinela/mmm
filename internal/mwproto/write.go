@@ -15,9 +15,26 @@ func Write(w io.Writer, msg Message) error {
 }
 
 func appendString(out []byte, s string) []byte {
-	out = byteOrder.AppendUint32(out, toUint32(len(s)))
+	out = appendVarint32(out, len(s))
 	out = append(out, s...)
 	return out
+}
+
+// Used for writing the length of strings.
+// https://learn.microsoft.com/en-us/dotnet/api/system.io.binarywriter.write7bitencodedint
+func appendVarint32(out []byte, x int) []byte {
+	v := int32(x)
+	if int64(v) != int64(x) {
+		panic(fmt.Sprintf("value out of int32 range: %d", x))
+	}
+	u := uint32(v)
+	for {
+		out = append(out, byte(u&(1<<7-1)))
+		u >>= 7
+		if u == 0 {
+			return out
+		}
+	}
 }
 
 func toUint32(x int) uint32 {
