@@ -31,10 +31,19 @@ messages during operation.
 
 ### General considerations
 
-Multi-byte integers are encoded in little-endian format.
+Fixed-width integers are encoded in little-endian format.
 
-Strings are encoded as a 32-bit integer length followed by the UTF-8 encoding
-of the string.
+Strings are encoded as a length prefix followed by the UTF-8 encoding of the
+string.
+
+String lengths are sent in little-endian order, seven bits at the time;
+the high bit of each byte indicates whether more bytes follow, and the remaining
+bits are the next highest seven bits of the value.
+
+(This is how .NET's [BinaryWriter][] writes strings by default; see the [Write7BitEncodedInt][] method in particular.)
+
+[BinaryWriter]: https://learn.microsoft.com/en-us/dotnet/api/system.io.binarywriter
+[Write7BitEncodedInt]: https://learn.microsoft.com/en-us/dotnet/api/system.io.binarywriter.write7bitencodedint
 
 ### Header
 
