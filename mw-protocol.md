@@ -1,10 +1,11 @@
 # The Hollow Knight MultiWorld Protocol
 
-The HK MultiWorld and ItemSync mods and server use a custom binary protocol to communicate.
+The HK MultiWorld and ItemSync mods and server use a custom binary protocol over
+TCP to communicate.
 This protocol was, until now, undocumented and the only reference was the
 [MultiWorld source code][mwsrc] itself; this document aims to rectify that.
 
-It covers both the details of messages are encoded, and the overall flow of
+It covers both the details of how messages are encoded, and the overall flow of
 messages during operation.
 
 [mwsrc]: https://github.com/Shadudev/HollowKnight.MultiWorld/
@@ -67,3 +68,15 @@ to that. Contains one field:
 
 When sent by the server, this message also has the SenderUID header field set to
 the UID that has been assigned to the client.
+
+### Disconnect (Type 3)
+
+Sent by the client to signal an intent to disconnect from the server. Contains
+no fields.
+
+### Ping (Type 12)
+
+Sent regularly by the client to verify that the connection is still alive.
+Contains one unused field:
+
+- ReplyValue (32-bit unsigned integer)

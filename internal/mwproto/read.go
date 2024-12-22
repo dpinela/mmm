@@ -27,12 +27,21 @@ func Read(r io.Reader) (Message, error) {
 	if _, err := io.ReadFull(r, msgBuf); err != nil {
 		return nil, fmt.Errorf("read message: %w", err)
 	}
-	msgType := Type(byteOrder.Uint32(msgBuf[:4]))
+	msgType := messageType(byteOrder.Uint32(msgBuf[:4]))
+	payload := msgBuf[headerSize-lengthFieldSize:]
 	// SenderUID and MessageID can be ignored.
 	switch msgType {
-	case TypeConnect:
+	case typeConnect:
 		return ConnectMessage{}, nil
+	case typeDisconnect:
+		return DisconnectMessage{}, nil
+	case typePing:
+		return unmarshalPing(payload), nil
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}
+}
+
+func unmarshalPing(payload []byte) PingMessage {
+	return PingMessage{byteOrder.Uint32(payload)}
 }
