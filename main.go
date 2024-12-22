@@ -31,7 +31,8 @@ func serve() error {
 			log.Println(err)
 			continue
 		}
-		go serveClient(s, conn)
+		cc := &clientConn{server: s, Conn: conn}
+		go cc.serve()
 	}
 }
 
@@ -44,67 +45,64 @@ type room struct {
 	players map[string]net.Conn
 }
 
-func serveClient(srv *server, conn net.Conn) {
-	defer conn.Close()
-
-	log.Printf("connection from %s", conn.RemoteAddr())
-	err := pumpMessages(conn, func(msg mwproto.Message) error {
-		_, ok := msg.(mwproto.ConnectMessage)
-		if ok {
-			err := mwproto.Write(conn, mwproto.ConnectMessage{ServerName: srv.name})
-			if err != nil {
-				return err
-			}
-			return errPumpDone
-		}
-		return nil
-	})
-	if err != nil {
-		log.Printf("connection from %s terminated: %v", conn.RemoteAddr(), err)
-		return
-	}
-	err = pumpMessages(conn, func(_ mwproto.Message) error {
-		return nil
-	})
-	if err != nil {
-		log.Printf("connection from %s terminated: %v", conn.RemoteAddr(), err)
-		return
-	}
+type clientConn struct {
+	server *server
+	net.Conn
 }
 
-var errPumpDone = errors.New("done pumping messages")
-var errDisconnected = errors.New("client disconnected")
+func (conn *clientConn) serve() {
+	defer conn.Close()
 
-func pumpMessages(conn net.Conn, handle func(msg mwproto.Message) error) error {
+	handle := awaitConnection
+
 	for {
 		msg, err := mwproto.Read(conn)
 		if err != nil {
 			var netErr net.Error
-			if errors.As(err, &netErr) || errors.Is(err, io.EOF) {
-				return err
-			}
 			log.Printf("read from %s: %v", conn.RemoteAddr(), err)
+			if errors.As(err, &netErr) || errors.Is(err, io.EOF) {
+				return
+			}
 			continue
 		}
 
 		switch msg.(type) {
 		case mwproto.PingMessage:
 			if err := mwproto.Write(conn, msg); err != nil {
-				return err
+				log.Printf("respond to ping from %s: %v", conn.RemoteAddr(), err)
+				return
 			}
+			continue
 		case mwproto.DisconnectMessage:
-			return errDisconnected
+			log.Printf("connection from %s terminated", conn.RemoteAddr())
+			return
 		}
 
-		if err := handle(msg); err != nil {
-			if err == errPumpDone {
-				return nil
-			}
+		newHandle, err := handle(conn, msg)
+		if err != nil {
+			log.Printf("handle message from %s: %v", conn.RemoteAddr(), err)
 			var netErr net.Error
 			if errors.As(err, &netErr) {
-				return err
+				return
 			}
-			log.Printf("handle message from %s: %v", conn.RemoteAddr(), err)
 		}
+		handle = newHandle
 	}
+}
+
+type messageHandler func(conn *clientConn, msg mwproto.Message) (messageHandler, error)
+
+func awaitConnection(conn *clientConn, msg mwproto.Message) (messageHandler, error) {
+	if _, ok := msg.(mwproto.ConnectMessage); !ok {
+		log.Printf("unexpected message (awaiting connection) from %s: %v", conn.RemoteAddr(), msg)
+		return awaitConnection, nil
+	}
+	if err := mwproto.Write(conn, mwproto.ConnectMessage{ServerName: conn.server.name}); err != nil {
+		return nil, err
+	}
+	return ignoreEverything, nil
+}
+
+func ignoreEverything(conn *clientConn, msg mwproto.Message) (messageHandler, error) {
+	return ignoreEverything, nil
 }
