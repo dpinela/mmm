@@ -2,6 +2,7 @@ package mwproto
 
 import (
 	"encoding/binary"
+	"encoding/json"
 )
 
 type messageType uint32
@@ -77,5 +78,60 @@ func (m DisconnectMessage) msgType() messageType {
 }
 
 func (m DisconnectMessage) appendTo(b []byte) []byte { return b }
+
+type ReadyMessage struct {
+	Room          string
+	Nickname      string
+	Mode          byte
+	ReadyMetadata [][]string
+}
+
+func (m ReadyMessage) msgType() messageType {
+	return typeReady
+}
+
+func (m ReadyMessage) appendTo(b []byte) []byte {
+	panic("Ready message not meant to be sent from server")
+}
+
+type ReadyConfirmMessage struct {
+	Names []string
+}
+
+func (ReadyConfirmMessage) msgType() messageType {
+	return typeReadyConfirm
+}
+
+func (m ReadyConfirmMessage) appendTo(b []byte) []byte {
+	b = byteOrder.AppendUint32(b, toUint32(len(m.Names)))
+	names, err := json.Marshal(m.Names)
+	if err != nil {
+		panic(err)
+	}
+	b = appendBytes(b, names)
+	return b
+}
+
+type ReadyDenyMessage struct {
+	Description string
+}
+
+func (ReadyDenyMessage) msgType() messageType {
+	return typeReadyDeny
+}
+
+func (m ReadyDenyMessage) appendTo(b []byte) []byte {
+	return appendString(b, m.Description)
+}
+
+type UnreadyMessage struct{}
+
+func (UnreadyMessage) msgType() messageType {
+	return typeUnready
+}
+
+func (m UnreadyMessage) appendTo(b []byte) []byte {
+	return b
+}
 
 var byteOrder = binary.LittleEndian

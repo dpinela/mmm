@@ -60,7 +60,7 @@ fields:
 
 ### Connect (Type 2)
 
-Sent both by the client as their initial message, and by the server as a response
+Sent both by the client as its initial message, and by the server as a response
 to that. Contains one field:
 
 - ServerName (string): a human-readable name for the server. Has no significance
@@ -80,3 +80,33 @@ Sent regularly by the client to verify that the connection is still alive.
 Contains one unused field:
 
 - ReplyValue (32-bit unsigned integer)
+
+### Ready (Type 13)
+
+Sent by the client to join a room. Contains the following:
+
+- Room (string): the name of the room to join.
+- Nickname (string): the nickname to use in that room.
+  This will be displayed in-game once the game is joined, too.
+- ReadyMode (8-bit integer): always 0. Formerly differentiated between MultiWorld (0)
+  and ItemSync (1); now the latter has its own Ready message type.
+- ReadyMetadata (JSON string): an array of [key, value] arrays which will be
+  broadcast to other players with the Result message.
+
+### Ready Confirm (Type 10)
+
+Sent by the server to notify the client that it has joined a room and to indicate which
+other players are connected. Contains two fields:
+
+- Ready (32-bit unsigned integer): the number of players in the room (redundant with Names)
+- Names (JSON string): an array containing the Nicknames of every player in the room
+
+### Ready Deny (Type 11)
+
+Sent by the server to indicate that the client cannot join a room. Contains one field:
+
+- Description (string): a human-readable explanation of why the join failed.
+
+### Unready (Type 17)
+
+Sent by the client to leave its current room. Contains no fields.

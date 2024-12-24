@@ -1,6 +1,7 @@
 package mwproto
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -37,6 +38,10 @@ func Read(r io.Reader) (Message, error) {
 		return DisconnectMessage{}, nil
 	case typePing:
 		return unmarshalPing(payload), nil
+	case typeReady:
+		return unmarshalReady(payload)
+	case typeUnready:
+		return UnreadyMessage{}, nil
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}
@@ -44,4 +49,41 @@ func Read(r io.Reader) (Message, error) {
 
 func unmarshalPing(payload []byte) PingMessage {
 	return PingMessage{byteOrder.Uint32(payload)}
+}
+
+func unmarshalReady(payload []byte) (m ReadyMessage, err error) {
+	m.Room, payload, err = unmarshalString(payload)
+	if err != nil {
+		return
+	}
+	m.Nickname, payload, err = unmarshalString(payload)
+	if err != nil {
+		return
+	}
+	m.Mode = payload[0]
+	rawMetadata, payload, err := unmarshalBytes(payload[1:])
+	err = json.Unmarshal(rawMetadata, &m.ReadyMetadata)
+	return
+}
+
+func unmarshalString(payload []byte) (str string, remainder []byte, err error) {
+	b, r, err := unmarshalBytes(payload)
+	return string(b), r, err
+}
+
+func unmarshalBytes(payload []byte) (str []byte, remainder []byte, err error) {
+	length := 0
+	for i, b := range payload {
+		length |= int(b&0x7f) << (i * 7)
+		if b&0x80 != 0 {
+			continue
+		}
+		start := i + 1
+		end := start + length
+		if end > len(payload) {
+			return nil, payload, fmt.Errorf("string value length exceeds message payload; got %d, remaining payload is %d bytes long", length, len(payload))
+		}
+		return payload[start:end], payload[end:], nil
+	}
+	return nil, payload, fmt.Errorf("unterminated string value length: % 02x", payload)
 }

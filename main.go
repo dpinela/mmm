@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"slices"
+	"sync"
 
 	"github.com/dpinela/mmm/internal/mwproto"
 )
@@ -24,49 +26,166 @@ func serve() error {
 		return err
 	}
 	defer srv.Close()
-	s := &server{name: "MMM", rooms: map[string]*room{}}
+	s := &server{name: "MMM", rooms: map[string]chan<- roomCommand{}}
+	var nextUID uid
 	for {
 		conn, err := srv.Accept()
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		cc := &clientConn{server: s, Conn: conn}
+		cc := &clientConn{server: s, uid: nextUID, Conn: conn}
+		nextUID++
 		go cc.serve()
 	}
 }
 
 type server struct {
-	name  string
-	rooms map[string]*room
+	name string
+
+	roomsMu sync.Mutex
+	rooms   map[string]chan<- roomCommand
 }
 
 type room struct {
-	players map[string]net.Conn
+	name    string
+	players []player
+}
+
+func (r *room) run(commands <-chan roomCommand) {
+	log.Printf("opened room %q", r.name)
+	for cmd := range commands {
+		cmd(r)
+		if len(r.players) == 0 {
+			log.Printf("closing room %q, no players left", r.name)
+			return
+		}
+	}
+}
+
+func (r *room) join(p player) {
+	r.players = append(r.players, p)
+	r.broadcastNicknames()
+}
+
+func (r *room) leave(id uid) {
+	for i, p := range r.players {
+		if p.uid == id {
+			r.players = slices.Delete(r.players, i, i+1)
+			r.broadcastNicknames()
+			return
+		}
+	}
+	log.Printf("nonexistent player attempted to leave room %q", r.name)
+}
+
+func (r *room) broadcastNicknames() {
+	nicknames := make([]string, len(r.players))
+	for i, p := range r.players {
+		nicknames[i] = p.nickname
+	}
+	for _, p := range r.players {
+		p.roomMessages <- playersJoinedMessage{nicknames: nicknames}
+	}
+}
+
+type roomCommand func(r *room)
+
+type player struct {
+	uid          uid
+	nickname     string
+	roomMessages chan<- roomMessage
+}
+
+type roomMessage interface {
+	isRoomMessage()
+}
+
+type playersJoinedMessage struct {
+	nicknames []string
+}
+
+func (playersJoinedMessage) isRoomMessage() {}
+
+func (srv *server) openRoom(roomName string) chan<- roomCommand {
+	srv.roomsMu.Lock()
+	defer srv.roomsMu.Unlock()
+
+	rCh := srv.rooms[roomName]
+	if rCh == nil {
+		ch := make(chan roomCommand)
+		srv.rooms[roomName] = ch
+		rCh = ch
+		r := &room{name: roomName}
+		go r.run(ch)
+	}
+	return rCh
 }
 
 type clientConn struct {
 	server *server
+	uid    uid
 	net.Conn
+}
+
+type uid uint64
+
+func (conn *clientConn) read(ch chan<- mwproto.Message) {
+	for {
+		msg, err := mwproto.Read(conn)
+		if err != nil {
+			log.Printf("read from %s: %v", conn.RemoteAddr(), err)
+			var netErr net.Error
+			if errors.As(err, &netErr) || errors.Is(err, io.EOF) {
+				close(ch)
+				return
+			}
+		}
+		ch <- msg
+	}
 }
 
 func (conn *clientConn) serve() {
 	defer conn.Close()
 
-	handle := awaitConnection
+	log.Printf("new connection from %s", conn.RemoteAddr())
+
+	clientMessages := make(chan mwproto.Message)
+	go conn.read(clientMessages)
+
+	var roomMessages chan roomMessage
+	var roomCommands chan<- roomCommand
+
+	defer func() {
+		if roomCommands != nil {
+			roomCommands <- func(r *room) {
+				r.leave(conn.uid)
+			}
+		}
+	}()
 
 	for {
-		msg, err := mwproto.Read(conn)
-		if err != nil {
-			var netErr net.Error
-			log.Printf("read from %s: %v", conn.RemoteAddr(), err)
-			if errors.As(err, &netErr) || errors.Is(err, io.EOF) {
+		msg, ok := <-clientMessages
+		if !ok {
+			return
+		}
+		if _, ok := msg.(mwproto.ConnectMessage); ok {
+			if err := mwproto.Write(conn, mwproto.ConnectMessage{ServerName: conn.server.name}); err != nil {
+				log.Printf("acknowledge connection from %s: %v", conn.RemoteAddr(), err)
 				return
 			}
-			continue
+			break
 		}
+		log.Printf("unexpected message (awaiting connection) from %s: %v", conn.RemoteAddr(), msg)
+	}
 
-		switch msg.(type) {
+awaitReady:
+	for {
+		msg, ok := <-clientMessages
+		if !ok {
+			return
+		}
+		switch msg := msg.(type) {
 		case mwproto.PingMessage:
 			if err := mwproto.Write(conn, msg); err != nil {
 				log.Printf("respond to ping from %s: %v", conn.RemoteAddr(), err)
@@ -76,33 +195,59 @@ func (conn *clientConn) serve() {
 		case mwproto.DisconnectMessage:
 			log.Printf("connection from %s terminated", conn.RemoteAddr())
 			return
+		case mwproto.ReadyMessage:
+			if msg.Mode != 0 {
+				log.Printf("invalid room mode from %s: %d", conn.RemoteAddr(), msg.Mode)
+				if err := mwproto.Write(conn, mwproto.ReadyDenyMessage{Description: "invalid room mode"}); err != nil {
+					log.Printf("send ready deny to %s: %v", conn.RemoteAddr(), err)
+					return
+				}
+			}
+			roomMessages = make(chan roomMessage)
+			roomCommands = conn.server.openRoom(msg.Room)
+			p := player{nickname: msg.Nickname, uid: conn.uid, roomMessages: roomMessages}
+			roomCommands <- func(r *room) {
+				r.join(p)
+			}
+			break awaitReady
+		default:
+			log.Printf("unexpected message (awaiting ready) from %s: %v", conn.RemoteAddr(), msg)
 		}
+	}
 
-		newHandle, err := handle(conn, msg)
-		if err != nil {
-			log.Printf("handle message from %s: %v", conn.RemoteAddr(), err)
-			var netErr net.Error
-			if errors.As(err, &netErr) {
+	for {
+		select {
+		case msg, ok := <-clientMessages:
+			if !ok {
 				return
 			}
+			switch msg.(type) {
+			case mwproto.PingMessage:
+				if err := mwproto.Write(conn, msg); err != nil {
+					log.Printf("respond to ping from %s: %v", conn.RemoteAddr(), err)
+					return
+				}
+				continue
+			case mwproto.DisconnectMessage:
+				log.Printf("connection from %s terminated", conn.RemoteAddr())
+				return
+			case mwproto.UnreadyMessage:
+				roomCommands <- func(r *room) {
+					r.leave(conn.uid)
+				}
+				roomCommands = nil
+				roomMessages = nil
+				goto awaitReady
+			default:
+				log.Printf("unexpected message (in room) from %s: %v", conn.RemoteAddr(), msg)
+			}
+		case msg := <-roomMessages:
+			if pm, ok := msg.(playersJoinedMessage); ok {
+				if err := mwproto.Write(conn, mwproto.ReadyConfirmMessage{Names: pm.nicknames}); err != nil {
+					log.Printf("send nicknames to %s: %v", conn.RemoteAddr(), err)
+					return
+				}
+			}
 		}
-		handle = newHandle
 	}
-}
-
-type messageHandler func(conn *clientConn, msg mwproto.Message) (messageHandler, error)
-
-func awaitConnection(conn *clientConn, msg mwproto.Message) (messageHandler, error) {
-	if _, ok := msg.(mwproto.ConnectMessage); !ok {
-		log.Printf("unexpected message (awaiting connection) from %s: %v", conn.RemoteAddr(), msg)
-		return awaitConnection, nil
-	}
-	if err := mwproto.Write(conn, mwproto.ConnectMessage{ServerName: conn.server.name}); err != nil {
-		return nil, err
-	}
-	return ignoreEverything, nil
-}
-
-func ignoreEverything(conn *clientConn, msg mwproto.Message) (messageHandler, error) {
-	return ignoreEverything, nil
 }

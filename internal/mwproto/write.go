@@ -20,6 +20,12 @@ func appendString(out []byte, s string) []byte {
 	return out
 }
 
+func appendBytes(out []byte, s []byte) []byte {
+	out = appendVarint32(out, len(s))
+	out = append(out, s...)
+	return out
+}
+
 // Used for writing the length of strings.
 // See https://learn.microsoft.com/en-us/dotnet/api/system.io.binarywriter.write7bitencodedint for the origin of this format.
 func appendVarint32(out []byte, x int) []byte {
