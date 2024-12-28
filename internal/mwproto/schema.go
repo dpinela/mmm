@@ -2,7 +2,6 @@ package mwproto
 
 import (
 	"encoding/binary"
-	"encoding/json"
 )
 
 type messageType uint32
@@ -104,11 +103,7 @@ func (ReadyConfirmMessage) msgType() messageType {
 
 func (m ReadyConfirmMessage) appendTo(b []byte) []byte {
 	b = byteOrder.AppendUint32(b, toUint32(len(m.Names)))
-	names, err := json.Marshal(m.Names)
-	if err != nil {
-		panic(err)
-	}
-	b = appendBytes(b, names)
+	b = appendJSON(b, m.Names)
 	return b
 }
 
@@ -131,6 +126,28 @@ func (UnreadyMessage) msgType() messageType {
 }
 
 func (m UnreadyMessage) appendTo(b []byte) []byte {
+	return b
+}
+
+type InitiateGameMessage struct {
+	RandomizationAlgorithm int
+}
+
+func (InitiateGameMessage) msgType() messageType {
+	return typeInitiateGame
+}
+
+func (m InitiateGameMessage) appendTo(b []byte) []byte {
+	return appendJSON(b, m)
+}
+
+type RequestRandoMessage struct{}
+
+func (RequestRandoMessage) msgType() messageType {
+	return typeRequestRando
+}
+
+func (m RequestRandoMessage) appendTo(b []byte) []byte {
 	return b
 }
 

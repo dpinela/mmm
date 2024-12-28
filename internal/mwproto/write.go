@@ -1,6 +1,7 @@
 package mwproto
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 )
@@ -20,7 +21,11 @@ func appendString(out []byte, s string) []byte {
 	return out
 }
 
-func appendBytes(out []byte, s []byte) []byte {
+func appendJSON(out []byte, value any) []byte {
+	s, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
 	out = appendVarint32(out, len(s))
 	out = append(out, s...)
 	return out

@@ -42,6 +42,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshalReady(payload)
 	case typeUnready:
 		return UnreadyMessage{}, nil
+	case typeInitiateGame:
+		return unmarshalInitiateGame(payload)
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}
@@ -63,6 +65,15 @@ func unmarshalReady(payload []byte) (m ReadyMessage, err error) {
 	m.Mode = payload[0]
 	rawMetadata, payload, err := unmarshalBytes(payload[1:])
 	err = json.Unmarshal(rawMetadata, &m.ReadyMetadata)
+	return
+}
+
+func unmarshalInitiateGame(payload []byte) (m InitiateGameMessage, err error) {
+	raw, _, err := unmarshalBytes(payload)
+	if err != nil {
+		return
+	}
+	err = json.Unmarshal(raw, &m)
 	return
 }
 

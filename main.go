@@ -9,6 +9,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/dpinela/mmm/internal/mwproto"
 )
@@ -63,30 +64,57 @@ func (r *room) run(commands <-chan roomCommand) {
 	}
 }
 
+const roomMessageTimeout = 5 * time.Second
+
 func (r *room) join(p player) {
 	r.players = append(r.players, p)
-	r.broadcastNicknames()
+	r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
 }
 
 func (r *room) leave(id uid) {
 	for i, p := range r.players {
 		if p.uid == id {
 			r.players = slices.Delete(r.players, i, i+1)
-			r.broadcastNicknames()
+			r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
 			return
 		}
 	}
 	log.Printf("nonexistent player attempted to leave room %q", r.name)
 }
 
-func (r *room) broadcastNicknames() {
+func (r *room) nicknames() []string {
 	nicknames := make([]string, len(r.players))
 	for i, p := range r.players {
 		nicknames[i] = p.nickname
 	}
-	for _, p := range r.players {
-		p.roomMessages <- playersJoinedMessage{nicknames: nicknames}
+	return nicknames
+}
+
+func (r *room) broadcast(msg roomMessage) {
+	var wg sync.WaitGroup
+	wg.Add(len(r.players))
+
+	timeoutCh := make(chan struct{})
+	time.AfterFunc(roomMessageTimeout, func() { close(timeoutCh) })
+
+	trySend := func(p player) {
+		defer wg.Done()
+		select {
+		case p.roomMessages <- msg:
+		case <-timeoutCh:
+			log.Printf("broadcast to %s timed out; message was %v", p.nickname, msg)
+		}
 	}
+
+	for _, p := range r.players {
+		trySend(p)
+	}
+
+	wg.Wait()
+}
+
+func (r *room) startRandomization() {
+	r.broadcast(randomizationStarting{})
 }
 
 type roomCommand func(r *room)
@@ -106,6 +134,10 @@ type playersJoinedMessage struct {
 }
 
 func (playersJoinedMessage) isRoomMessage() {}
+
+type randomizationStarting struct{}
+
+func (randomizationStarting) isRoomMessage() {}
 
 func (srv *server) openRoom(roomName string) chan<- roomCommand {
 	srv.roomsMu.Lock()
@@ -221,7 +253,7 @@ awaitReady:
 			if !ok {
 				return
 			}
-			switch msg.(type) {
+			switch msg := msg.(type) {
 			case mwproto.PingMessage:
 				if err := mwproto.Write(conn, msg); err != nil {
 					log.Printf("respond to ping from %s: %v", conn.RemoteAddr(), err)
@@ -232,20 +264,35 @@ awaitReady:
 				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return
 			case mwproto.UnreadyMessage:
+				// this can also deadlock if room is broadcasting a message
+				// but hasn't sent it to this session yet
 				roomCommands <- func(r *room) {
 					r.leave(conn.uid)
 				}
 				roomCommands = nil
 				roomMessages = nil
 				goto awaitReady
+			case mwproto.InitiateGameMessage:
+				if msg.RandomizationAlgorithm != 0 {
+					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
+					continue
+				}
+				roomCommands <- func(r *room) {
+					r.startRandomization()
+				}
 			default:
 				log.Printf("unexpected message (in room) from %s: %v", conn.RemoteAddr(), msg)
 			}
 		case msg := <-roomMessages:
-			if pm, ok := msg.(playersJoinedMessage); ok {
-				if err := mwproto.Write(conn, mwproto.ReadyConfirmMessage{Names: pm.nicknames}); err != nil {
+			switch msg := msg.(type) {
+			case playersJoinedMessage:
+				if err := mwproto.Write(conn, mwproto.ReadyConfirmMessage{Names: msg.nicknames}); err != nil {
 					log.Printf("send nicknames to %s: %v", conn.RemoteAddr(), err)
 					return
+				}
+			case randomizationStarting:
+				if err := mwproto.Write(conn, mwproto.RequestRandoMessage{}); err != nil {
+					log.Printf("sending rando request to %s: %v", conn.RemoteAddr(), err)
 				}
 			}
 		}

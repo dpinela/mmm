@@ -110,3 +110,17 @@ Sent by the server to indicate that the client cannot join a room. Contains one 
 ### Unready (Type 17)
 
 Sent by the client to leave its current room. Contains no fields.
+
+### Initiate Game (Type 18)
+
+Sent by the client to start the process of mixing together everyone's seeds. Contains
+one field:
+
+- Settings (JSON string): an object with two keys:
+  - Seed: an unused integer.
+  - RandomizationAlgorithm: can only be 0; other values reserved for future use.
+
+### Request Rando (Type 19)
+
+Sent by the server to all players in a room after one of them sends an Initiate Game,
+to request each of them to send their local seed. Contains no fields.
