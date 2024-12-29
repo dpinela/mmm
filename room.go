@@ -1,7 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"log"
+	"maps"
+	"math/bits"
+	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 )
@@ -14,7 +19,7 @@ type room struct {
 type player struct {
 	nickname       string
 	roomMessages   chan<- roomMessage
-	generatedRando *randoSeed
+	generatedRando *world
 }
 
 type placement struct {
@@ -24,10 +29,12 @@ type placement struct {
 
 type sphere []placement
 
-type randoSeed struct {
+type world struct {
 	placements map[string][]sphere
-	seed       int
+	seed       int64
 }
+
+type roomCommand func(r *room)
 
 func (r *room) run(commands <-chan roomCommand) {
 	log.Printf("opened room %q", r.name)
@@ -60,7 +67,7 @@ func leave(id uid) roomCommand {
 	}
 }
 
-func uploadRando(id uid, seed randoSeed) roomCommand {
+func uploadRando(id uid, seed world) roomCommand {
 	return func(r *room) {
 		p, exists := r.players[id]
 		if !exists {
@@ -75,7 +82,21 @@ func uploadRando(id uid, seed randoSeed) roomCommand {
 				return
 			}
 		}
+
 		log.Printf("generating rando for room %q", r.name)
+
+		worlds := make([]world, 0, len(r.players))
+		for _, p := range r.players {
+			worlds = append(worlds, *p.generatedRando)
+		}
+		slices.SortStableFunc(worlds, func(w1, w2 world) int {
+			return cmp.Compare(w1.seed, w2.seed)
+		})
+		result := mix(worlds)
+		log.Printf("generated rando for room %q:", r.name)
+		for _, p := range result {
+			log.Printf("[%d]%s @ [%d]%s", p.item.world, p.item.name, p.location.world, p.location.name)
+		}
 	}
 }
 
@@ -114,4 +135,120 @@ func (r *room) startRandomization() {
 	r.broadcast(randomizationStarting{})
 }
 
-type roomCommand func(r *room)
+type mixedPlacement struct {
+	item     qualifiedItem
+	location qualifiedLocation
+}
+
+type qualifiedName struct {
+	world int
+	name  string
+}
+
+type qualifiedLocation qualifiedName
+type qualifiedItem qualifiedName
+
+func mix(worlds []world) []mixedPlacement {
+	var seed uint128
+	for _, w := range worlds {
+		seed = seed.mul(0xAAAA_AAAA_AAAA_AAAA).add(uint64(w.seed))
+	}
+	rng := rand.New(rand.NewPCG(seed.hi, seed.lo))
+
+	groups := map[string][]groupWorld{}
+	for i, w := range worlds {
+		for g, spheres := range w.placements {
+			groups[g] = append(groups[g], groupWorld{world: i, spheres: spheres})
+		}
+	}
+	groupNames := slices.Sorted(maps.Keys(groups))
+
+	var placements []mixedPlacement
+	for _, g := range groupNames {
+		placements = append(placements, mixGroup(rng, groups[g])...)
+	}
+	return placements
+}
+
+type groupWorld struct {
+	world   int
+	spheres []sphere
+}
+
+func mixGroup(rng *rand.Rand, worlds []groupWorld) []mixedPlacement {
+	type upcomingSphere struct {
+		index         int
+		itemsToUnlock int
+	}
+
+	var (
+		availableLocations []qualifiedLocation
+		availableItems     []qualifiedItem
+		nextSpheres        = make([]upcomingSphere, len(worlds))
+	)
+	for i, w := range worlds {
+		if len(w.spheres) == 0 {
+			continue
+		}
+		nextSpheres[i] = upcomingSphere{index: 1, itemsToUnlock: len(w.spheres[0])}
+		for _, p := range w.spheres[0] {
+			availableLocations = append(availableLocations, qualifiedLocation{world: i, name: p.Location})
+			availableItems = append(availableItems, qualifiedItem{world: i, name: p.Item})
+		}
+	}
+
+	var placements []mixedPlacement
+
+	for len(availableLocations) > 0 {
+		var (
+			loc  qualifiedLocation
+			item qualifiedItem
+		)
+		loc, availableLocations = sample(rng, availableLocations)
+		item, availableItems = sample(rng, availableItems)
+		placements = append(placements, mixedPlacement{item: item, location: loc})
+
+		w := item.world
+		ns := &nextSpheres[w]
+		ns.itemsToUnlock--
+		hasMoreSpheres := ns.index < len(worlds[w].spheres)
+		if ns.itemsToUnlock == 0 && hasMoreSpheres {
+			newSphere := worlds[w].spheres[ns.index]
+			ns.index++
+			ns.itemsToUnlock = len(newSphere)
+			for _, p := range newSphere {
+				availableLocations = append(availableLocations, qualifiedLocation{world: w, name: p.Location})
+				availableItems = append(availableItems, qualifiedItem{world: w, name: p.Item})
+			}
+		}
+	}
+
+	return placements
+}
+
+func sample[S ~[]T, T any](rng *rand.Rand, items S) (pick T, rest S) {
+	i := rng.IntN(len(items))
+	pick = items[i]
+	items[i] = items[len(items)-1]
+	rest = items[:len(items)-1]
+	return
+}
+
+type uint128 struct {
+	hi, lo uint64
+}
+
+func (x uint128) mul(k uint64) uint128 {
+	var xk uint128
+	xk.hi, xk.lo = bits.Mul64(x.lo, k)
+	xk.hi += x.hi * k
+	return xk
+}
+
+func (x uint128) add(k uint64) uint128 {
+	var y uint128
+	var c uint64
+	y.lo, c = bits.Add64(x.lo, k, 0)
+	y.hi = x.hi + c
+	return y
+}

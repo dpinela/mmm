@@ -202,8 +202,8 @@ awaitReady:
 					placementMap[group] = spheres
 				}
 
-				roomCommands <- uploadRando(conn.uid, randoSeed{
-					seed:       int(msg.Seed),
+				roomCommands <- uploadRando(conn.uid, world{
+					seed:       int64(msg.Seed),
 					placements: placementMap,
 				})
 			default:
