@@ -25,20 +25,24 @@ func (r *room) run(commands <-chan roomCommand) {
 
 const roomMessageTimeout = 5 * time.Second
 
-func (r *room) join(p player) {
-	r.players = append(r.players, p)
-	r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
+func join(p player) roomCommand {
+	return func(r *room) {
+		r.players = append(r.players, p)
+		r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
+	}
 }
 
-func (r *room) leave(id uid) {
-	for i, p := range r.players {
-		if p.uid == id {
-			r.players = slices.Delete(r.players, i, i+1)
-			r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
-			return
+func leave(id uid) roomCommand {
+	return func(r *room) {
+		for i, p := range r.players {
+			if p.uid == id {
+				r.players = slices.Delete(r.players, i, i+1)
+				r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
+				return
+			}
 		}
+		log.Printf("nonexistent player attempted to leave room %q", r.name)
 	}
-	log.Printf("nonexistent player attempted to leave room %q", r.name)
 }
 
 func (r *room) nicknames() []string {

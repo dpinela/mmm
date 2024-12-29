@@ -118,9 +118,7 @@ func (conn *clientConn) serve() {
 
 	defer func() {
 		if roomCommands != nil {
-			roomCommands <- func(r *room) {
-				r.leave(conn.uid)
-			}
+			roomCommands <- leave(conn.uid)
 		}
 	}()
 
@@ -166,9 +164,7 @@ awaitReady:
 			roomMessages = make(chan roomMessage)
 			roomCommands = conn.server.openRoom(msg.Room)
 			p := player{nickname: msg.Nickname, uid: conn.uid, roomMessages: roomMessages}
-			roomCommands <- func(r *room) {
-				r.join(p)
-			}
+			roomCommands <- join(p)
 			break awaitReady
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %v", conn.RemoteAddr(), msg)
@@ -194,9 +190,7 @@ awaitReady:
 			case mwproto.UnreadyMessage:
 				// this can also deadlock if room is broadcasting a message
 				// but hasn't sent it to this session yet
-				roomCommands <- func(r *room) {
-					r.leave(conn.uid)
-				}
+				roomCommands <- leave(conn.uid)
 				roomCommands = nil
 				roomMessages = nil
 				goto awaitReady
@@ -205,9 +199,7 @@ awaitReady:
 					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
 					continue
 				}
-				roomCommands <- func(r *room) {
-					r.startRandomization()
-				}
+				roomCommands <- (*room).startRandomization
 			case mwproto.RandoGeneratedMessage:
 				log.Printf("seed: %v", msg.Seed)
 				for group, placements := range msg.Items {
