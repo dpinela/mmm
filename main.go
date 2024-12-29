@@ -182,8 +182,6 @@ awaitReady:
 				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return
 			case mwproto.UnreadyMessage:
-				// this can also deadlock if room is broadcasting a message
-				// but hasn't sent it to this session yet
 				roomCommands <- leave(conn.uid)
 				roomCommands = nil
 				roomMessages = nil
