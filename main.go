@@ -172,6 +172,7 @@ func (conn *clientConn) read(ch chan<- mwproto.Message) {
 				close(ch)
 				return
 			}
+			continue
 		}
 		ch <- msg
 	}
@@ -279,6 +280,14 @@ awaitReady:
 				}
 				roomCommands <- func(r *room) {
 					r.startRandomization()
+				}
+			case mwproto.RandoGeneratedMessage:
+				log.Printf("seed: %v", msg.Seed)
+				for group, placements := range msg.Items {
+					log.Printf("items of group %s:", group)
+					for _, p := range placements {
+						log.Printf("%s @ %s", p.Item, p.Location)
+					}
 				}
 			default:
 				log.Printf("unexpected message (in room) from %s: %v", conn.RemoteAddr(), msg)

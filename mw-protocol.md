@@ -107,6 +107,16 @@ Sent by the server to indicate that the client cannot join a room. Contains one 
 
 - Description (string): a human-readable explanation of why the join failed.
 
+### Rando Generated (Type 16)
+
+Sent by the client in response to a Request Rando; contains two fields:
+
+- Items (JSON string): an object mapping group names to arrays of Placement objects.
+  A Placement object has two keys:
+    - Item1 (string): the name of the item placed.
+    - Item2 (string): the location of that item.
+- Seed (32-bit signed integer): a seed to be used by the server's randomization algorithm.
+
 ### Unready (Type 17)
 
 Sent by the client to leave its current room. Contains no fields.

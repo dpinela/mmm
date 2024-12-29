@@ -151,4 +151,24 @@ func (m RequestRandoMessage) appendTo(b []byte) []byte {
 	return b
 }
 
+type RandoGeneratedMessage struct {
+	Items map[string][]Placement
+	Seed  int32
+}
+
+func (RandoGeneratedMessage) msgType() messageType {
+	return typeRandoGenerated
+}
+
+func (m RandoGeneratedMessage) appendTo(b []byte) []byte {
+	b = appendJSON(b, m.Items)
+	b = byteOrder.AppendUint32(b, uint32(m.Seed))
+	return b
+}
+
+type Placement struct {
+	Item     string `json:"Item1"`
+	Location string `json:"Item2"`
+}
+
 var byteOrder = binary.LittleEndian
