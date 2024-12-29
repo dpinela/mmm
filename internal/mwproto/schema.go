@@ -130,7 +130,7 @@ func (m UnreadyMessage) appendTo(b []byte) []byte {
 }
 
 type InitiateGameMessage struct {
-	RandomizationAlgorithm int
+	RandomizationAlgorithm any
 }
 
 func (InitiateGameMessage) msgType() messageType {

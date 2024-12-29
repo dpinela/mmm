@@ -46,12 +46,6 @@ type server struct {
 	rooms   map[string]chan<- roomCommand
 }
 
-type player struct {
-	uid          uid
-	nickname     string
-	roomMessages chan<- roomMessage
-}
-
 type roomMessage interface {
 	isRoomMessage()
 }
@@ -75,7 +69,7 @@ func (srv *server) openRoom(roomName string) chan<- roomCommand {
 		ch := make(chan roomCommand)
 		srv.rooms[roomName] = ch
 		rCh = ch
-		r := &room{name: roomName}
+		r := &room{name: roomName, players: map[uid]player{}}
 		go r.run(ch)
 	}
 	return rCh
@@ -163,8 +157,8 @@ awaitReady:
 			}
 			roomMessages = make(chan roomMessage)
 			roomCommands = conn.server.openRoom(msg.Room)
-			p := player{nickname: msg.Nickname, uid: conn.uid, roomMessages: roomMessages}
-			roomCommands <- join(p)
+			p := player{nickname: msg.Nickname, roomMessages: roomMessages}
+			roomCommands <- join(conn.uid, p)
 			break awaitReady
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %v", conn.RemoteAddr(), msg)
@@ -195,19 +189,25 @@ awaitReady:
 				roomMessages = nil
 				goto awaitReady
 			case mwproto.InitiateGameMessage:
-				if msg.RandomizationAlgorithm != 0 {
+				if !(msg.RandomizationAlgorithm == 0 || msg.RandomizationAlgorithm == "Default") {
 					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
 					continue
 				}
 				roomCommands <- (*room).startRandomization
 			case mwproto.RandoGeneratedMessage:
-				log.Printf("seed: %v", msg.Seed)
+				placementMap := make(map[string][]sphere, len(msg.Items))
 				for group, placements := range msg.Items {
-					log.Printf("items of group %s:", group)
-					for _, p := range placements {
-						log.Printf("%s @ %s", p.Item, p.Location)
+					spheres := make([]sphere, len(placements))
+					for i, p := range placements {
+						spheres[i] = sphere{placement(p)}
 					}
+					placementMap[group] = spheres
 				}
+
+				roomCommands <- uploadRando(conn.uid, randoSeed{
+					seed:       int(msg.Seed),
+					placements: placementMap,
+				})
 			default:
 				log.Printf("unexpected message (in room) from %s: %v", conn.RemoteAddr(), msg)
 			}

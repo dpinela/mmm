@@ -128,7 +128,7 @@ one field:
 
 - Settings (JSON string): an object with two keys:
   - Seed: an unused integer.
-  - RandomizationAlgorithm: can only be 0; other values reserved for future use.
+  - RandomizationAlgorithm: can only be 0 or the string "Default"; other values reserved for future use.
 
 ### Request Rando (Type 19)
 

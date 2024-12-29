@@ -2,14 +2,31 @@ package main
 
 import (
 	"log"
-	"slices"
 	"sync"
 	"time"
 )
 
 type room struct {
 	name    string
-	players []player
+	players map[uid]player
+}
+
+type player struct {
+	nickname       string
+	roomMessages   chan<- roomMessage
+	generatedRando *randoSeed
+}
+
+type placement struct {
+	Item     string
+	Location string
+}
+
+type sphere []placement
+
+type randoSeed struct {
+	placements map[string][]sphere
+	seed       int
 }
 
 func (r *room) run(commands <-chan roomCommand) {
@@ -25,30 +42,47 @@ func (r *room) run(commands <-chan roomCommand) {
 
 const roomMessageTimeout = 5 * time.Second
 
-func join(p player) roomCommand {
+func join(id uid, p player) roomCommand {
 	return func(r *room) {
-		r.players = append(r.players, p)
+		r.players[id] = p
 		r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
 	}
 }
 
 func leave(id uid) roomCommand {
 	return func(r *room) {
-		for i, p := range r.players {
-			if p.uid == id {
-				r.players = slices.Delete(r.players, i, i+1)
-				r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
+		if _, exists := r.players[id]; !exists {
+			log.Printf("nonexistent player attempted to leave room %q", r.name)
+			return
+		}
+		delete(r.players, id)
+		r.broadcast(playersJoinedMessage{nicknames: r.nicknames()})
+	}
+}
+
+func uploadRando(id uid, seed randoSeed) roomCommand {
+	return func(r *room) {
+		p, exists := r.players[id]
+		if !exists {
+			log.Printf("nonexistent player attempted to upload a rando in room %q", r.name)
+			return
+		}
+		p.generatedRando = &seed
+		r.players[id] = p
+
+		for _, p := range r.players {
+			if p.generatedRando == nil {
 				return
 			}
 		}
-		log.Printf("nonexistent player attempted to leave room %q", r.name)
+		log.Printf("generating rando for room %q", r.name)
 	}
 }
 
 func (r *room) nicknames() []string {
-	nicknames := make([]string, len(r.players))
-	for i, p := range r.players {
-		nicknames[i] = p.nickname
+	nicknames := make([]string, 0, len(r.players))
+	for _, p := range r.players {
+		nicknames = append(nicknames, p.nickname)
 	}
 	return nicknames
 }
