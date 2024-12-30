@@ -60,6 +60,10 @@ type randomizationStarting struct{}
 
 func (randomizationStarting) isRoomMessage() {}
 
+type randomizationResult mwproto.ResultMessage
+
+func (randomizationResult) isRoomMessage() {}
+
 func (srv *server) openRoom(roomName string) chan<- roomCommand {
 	srv.roomsMu.Lock()
 	defer srv.roomsMu.Unlock()
@@ -187,7 +191,7 @@ awaitReady:
 				roomMessages = nil
 				goto awaitReady
 			case mwproto.InitiateGameMessage:
-				if !(msg.RandomizationAlgorithm == 0 || msg.RandomizationAlgorithm == "Default") {
+				if !(msg.RandomizationAlgorithm == 0.0 || msg.RandomizationAlgorithm == "Default") {
 					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
 					continue
 				}
@@ -218,7 +222,11 @@ awaitReady:
 				}
 			case randomizationStarting:
 				if err := mwproto.Write(conn, mwproto.RequestRandoMessage{}); err != nil {
-					log.Printf("sending rando request to %s: %v", conn.RemoteAddr(), err)
+					log.Printf("send rando request to %s: %v", conn.RemoteAddr(), err)
+				}
+			case randomizationResult:
+				if err := mwproto.Write(conn, mwproto.ResultMessage(msg)); err != nil {
+					log.Printf("send rando result to %s: %v", conn.RemoteAddr(), err)
 				}
 			}
 		}

@@ -82,7 +82,12 @@ type ReadyMessage struct {
 	Room          string
 	Nickname      string
 	Mode          byte
-	ReadyMetadata [][]string
+	ReadyMetadata []KeyValuePair
+}
+
+type KeyValuePair struct {
+	Key   string `json:"Item1"`
+	Value string `json:"Item2"`
 }
 
 func (m ReadyMessage) msgType() messageType {
@@ -163,6 +168,48 @@ func (RandoGeneratedMessage) msgType() messageType {
 func (m RandoGeneratedMessage) appendTo(b []byte) []byte {
 	b = appendJSON(b, m.Items)
 	b = byteOrder.AppendUint32(b, uint32(m.Seed))
+	return b
+}
+
+type ResultMessage struct {
+	PlayerID              int32
+	RandoID               int32
+	Nicknames             []string
+	ReadyMetadata         [][]KeyValuePair
+	ItemsSpoiler          SpoilerLogs
+	Placements            map[string][]ResultPlacement
+	PlayerItemsPlacements map[string]string
+	GeneratedHash         string
+}
+
+// Some objects' fields must be named "Item1" and "Item2" in the output,
+// because they were defined as tuples in C# and that is what C# calls
+// its tuple fields, even when names are otherwise explicitly given to them.
+// See https://learn.microsoft.com/en-us/dotnet/csharp/language-reference/builtin-types/value-tuples
+
+type ResultPlacement struct {
+	Item     string `json:"Item1"`
+	Location string `json:"Item2"`
+}
+
+type SpoilerLogs struct {
+	FullOrderedItemsLog     string
+	IndividualWorldSpoilers map[string]string
+}
+
+func (ResultMessage) msgType() messageType {
+	return typeResult
+}
+
+func (m ResultMessage) appendTo(b []byte) []byte {
+	b = byteOrder.AppendUint32(b, uint32(m.PlayerID))
+	b = byteOrder.AppendUint32(b, uint32(m.RandoID))
+	b = appendJSON(b, m.Nicknames)
+	b = appendJSON(b, m.ReadyMetadata)
+	b = appendJSON(b, m.ItemsSpoiler)
+	b = appendJSON(b, m.Placements)
+	b = appendJSON(b, m.PlayerItemsPlacements)
+	b = appendString(b, m.GeneratedHash)
 	return b
 }
 

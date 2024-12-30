@@ -2,6 +2,9 @@ package main
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"log"
 	"maps"
 	"math/bits"
@@ -9,6 +12,8 @@ import (
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/dpinela/mmm/internal/mwproto"
 )
 
 type room struct {
@@ -20,6 +25,7 @@ type player struct {
 	nickname       string
 	roomMessages   chan<- roomMessage
 	generatedRando *world
+	readyMetadata  []mwproto.KeyValuePair
 }
 
 type placement struct {
@@ -85,19 +91,103 @@ func uploadRando(id uid, seed world) roomCommand {
 
 		log.Printf("generating rando for room %q", r.name)
 
-		worlds := make([]world, 0, len(r.players))
-		for _, p := range r.players {
-			worlds = append(worlds, *p.generatedRando)
+		type boundWorld struct {
+			player uid
+			world
 		}
-		slices.SortStableFunc(worlds, func(w1, w2 world) int {
+
+		boundWorlds := make([]boundWorld, 0, len(r.players))
+		for u, p := range r.players {
+			boundWorlds = append(boundWorlds, boundWorld{player: u, world: *p.generatedRando})
+		}
+		slices.SortStableFunc(boundWorlds, func(w1, w2 boundWorld) int {
 			return cmp.Compare(w1.seed, w2.seed)
 		})
-		result := mix(worlds)
-		log.Printf("generated rando for room %q:", r.name)
-		for _, p := range result {
-			log.Printf("[%d]%s @ [%d]%s", p.item.world, p.item.name, p.location.world, p.location.name)
+		worlds := make([]world, len(boundWorlds))
+		uids := make([]uid, len(boundWorlds))
+		for i, bw := range boundWorlds {
+			worlds[i] = bw.world
+			uids[i] = bw.player
 		}
+		result := mix(worlds)
+		resultHash := hash(result)
+
+		log.Printf("generated rando for room %q; hash = %s", r.name, resultHash)
+
+		nicknames := make([]string, 0, len(r.players))
+		metadata := make([][]mwproto.KeyValuePair, 0, len(r.players))
+		for _, p := range r.players {
+			nicknames = append(nicknames, p.nickname)
+			// The individual subarrays of the metadata array
+			// must all be non-null.
+			if p.readyMetadata == nil {
+				metadata = append(metadata, []mwproto.KeyValuePair{})
+			} else {
+				metadata = append(metadata, p.readyMetadata)
+			}
+		}
+		spoilers := make(map[string]string, len(r.players))
+		// TODO: assumes nicknames are unique!
+		for _, name := range nicknames {
+			spoilers[name] = ""
+		}
+
+		var wg sync.WaitGroup
+		wg.Add(len(r.players))
+
+		timeoutCh := make(chan struct{})
+		time.AfterFunc(roomMessageTimeout, func() { close(timeoutCh) })
+
+		trySend := func(p player, msg randomizationResult) {
+			defer wg.Done()
+			select {
+			case p.roomMessages <- msg:
+			case <-timeoutCh:
+				log.Printf("broadcast to %s timed out; message was %v", p.nickname, msg)
+			}
+		}
+
+		for i, u := range uids {
+			ownPlacements := map[string][]mwproto.ResultPlacement{}
+			ownItems := map[string]string{}
+			for _, p := range result {
+				if p.Location.World == i {
+					itemName := fmt.Sprintf("MW(%d)_%s", p.Item.World, p.Item.Name)
+					ownPlacements[p.Group] = append(ownPlacements[p.Group], mwproto.ResultPlacement{
+						Item:     itemName,
+						Location: p.Location.Name,
+					})
+				}
+				if p.Item.World == i {
+					locationName := fmt.Sprintf("MW(%d)_%s", p.Location.World, p.Location.Name)
+					ownItems[p.Item.Name] = locationName
+				}
+			}
+
+			rr := randomizationResult{
+				PlayerID:              int32(i),
+				RandoID:               0x7777_7777,
+				Nicknames:             nicknames,
+				ReadyMetadata:         metadata,
+				ItemsSpoiler:          mwproto.SpoilerLogs{IndividualWorldSpoilers: spoilers},
+				Placements:            ownPlacements,
+				PlayerItemsPlacements: ownItems,
+				GeneratedHash:         resultHash,
+			}
+			go trySend(r.players[u], rr)
+		}
+
+		wg.Wait()
 	}
+}
+
+func hash(placements []mixedPlacement) string {
+	sha := sha256.New224()
+	if err := json.NewEncoder(sha).Encode(placements); err != nil {
+		panic(err)
+	}
+	sum := sha.Sum(make([]byte, 0, sha256.Size224))
+	return fmt.Sprintf("%02X", sum)
 }
 
 func (r *room) nicknames() []string {
@@ -125,7 +215,7 @@ func (r *room) broadcast(msg roomMessage) {
 	}
 
 	for _, p := range r.players {
-		trySend(p)
+		go trySend(p)
 	}
 
 	wg.Wait()
@@ -135,14 +225,17 @@ func (r *room) startRandomization() {
 	r.broadcast(randomizationStarting{})
 }
 
+// fields exported so that they can be JSON-encoded
+
 type mixedPlacement struct {
-	item     qualifiedItem
-	location qualifiedLocation
+	Item     qualifiedItem
+	Location qualifiedLocation
+	Group    string
 }
 
 type qualifiedName struct {
-	world int
-	name  string
+	World int
+	Name  string
 }
 
 type qualifiedLocation qualifiedName
@@ -165,7 +258,7 @@ func mix(worlds []world) []mixedPlacement {
 
 	var placements []mixedPlacement
 	for _, g := range groupNames {
-		placements = append(placements, mixGroup(rng, groups[g])...)
+		placements = append(placements, mixGroup(rng, groups[g], g)...)
 	}
 	return placements
 }
@@ -175,7 +268,7 @@ type groupWorld struct {
 	spheres []sphere
 }
 
-func mixGroup(rng *rand.Rand, worlds []groupWorld) []mixedPlacement {
+func mixGroup(rng *rand.Rand, worlds []groupWorld, groupName string) []mixedPlacement {
 	type upcomingSphere struct {
 		index         int
 		itemsToUnlock int
@@ -192,8 +285,8 @@ func mixGroup(rng *rand.Rand, worlds []groupWorld) []mixedPlacement {
 		}
 		nextSpheres[i] = upcomingSphere{index: 1, itemsToUnlock: len(w.spheres[0])}
 		for _, p := range w.spheres[0] {
-			availableLocations = append(availableLocations, qualifiedLocation{world: i, name: p.Location})
-			availableItems = append(availableItems, qualifiedItem{world: i, name: p.Item})
+			availableLocations = append(availableLocations, qualifiedLocation{World: w.world, Name: p.Location})
+			availableItems = append(availableItems, qualifiedItem{World: w.world, Name: p.Item})
 		}
 	}
 
@@ -206,9 +299,14 @@ func mixGroup(rng *rand.Rand, worlds []groupWorld) []mixedPlacement {
 		)
 		loc, availableLocations = sample(rng, availableLocations)
 		item, availableItems = sample(rng, availableItems)
-		placements = append(placements, mixedPlacement{item: item, location: loc})
+		placements = append(placements, mixedPlacement{Item: item, Location: loc, Group: groupName})
 
-		w := item.world
+		w := slices.IndexFunc(worlds, func(gw groupWorld) bool {
+			return gw.world == item.World
+		})
+		if w == -1 {
+			panic("item placed for world not passed to mixGroup???")
+		}
 		ns := &nextSpheres[w]
 		ns.itemsToUnlock--
 		hasMoreSpheres := ns.index < len(worlds[w].spheres)
@@ -217,8 +315,8 @@ func mixGroup(rng *rand.Rand, worlds []groupWorld) []mixedPlacement {
 			ns.index++
 			ns.itemsToUnlock = len(newSphere)
 			for _, p := range newSphere {
-				availableLocations = append(availableLocations, qualifiedLocation{world: w, name: p.Location})
-				availableItems = append(availableItems, qualifiedItem{world: w, name: p.Item})
+				availableLocations = append(availableLocations, qualifiedLocation{World: item.World, Name: p.Location})
+				availableItems = append(availableItems, qualifiedItem{World: item.World, Name: p.Item})
 			}
 		}
 	}
