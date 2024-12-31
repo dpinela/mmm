@@ -187,7 +187,7 @@ func hash(placements []mixedPlacement) string {
 		panic(err)
 	}
 	sum := sha.Sum(make([]byte, 0, sha256.Size224))
-	return fmt.Sprintf("%02X", sum)
+	return fmt.Sprintf("%02X", sum[:8])
 }
 
 func (r *room) nicknames() []string {

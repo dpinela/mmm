@@ -134,3 +134,22 @@ one field:
 
 Sent by the server to all players in a room after one of them sends an Initiate Game,
 to request each of them to send their local seed. Contains no fields.
+
+### Result (Type 14)
+
+Sent by the server to each player in the room after all the seeds are mixed
+together. Contains the following:
+
+- PlayerID (32-bit signed integer): the unique identifier of the player within this game.
+- RandoID (32-bit signed integer): the unique identifier of the game.
+- Nicknames (JSON string): array of the nicknames of all players in the game, like in a Ready Confirm message.
+- ReadyMetadata (JSON string): array of the ReadyMetadata supplied by each player in their Ready message, in the same order as in the Nicknames array.
+- ItemsSpoiler (JSON string): an object with the following keys:
+  - FullOrderedItemsLog: a full textual spoiler log for the entire multiworld.
+  - IndividualWorldSpoilers: an object containing textual spoiler logs for each individual world, keyed by nickname.
+- Placements (JSON string): an object mapping group names to arrays of Placement objects describing items placed in the player's own world.
+  Item names in this object are prefixed with `MW(N)_`, where N is the PlayerID of the
+  player the item belongs to.
+- PlayerItemsPlacements (JSON string): an object mapping the player's own item names to the locations (in their world or otherwise) where they were placed.
+  Location names in this object are prefix with `MW_(N)_`, where N is the PlayerID of the player that the location belongs to.
+- GeneratedHash (string): a hash of all placements in the multiworld; the specific format is implementation-defined.
