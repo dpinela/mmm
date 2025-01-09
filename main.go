@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/dpinela/mmm/internal/mwproto"
+	"github.com/dpinela/mmm/internal/storage"
 )
 
 func main() {
@@ -20,12 +21,17 @@ func main() {
 }
 
 func serve() error {
+	db, err := storage.Open(":memory:")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
 	srv, err := net.Listen("tcp", "localhost:38281")
 	if err != nil {
 		return err
 	}
 	defer srv.Close()
-	s := &server{name: "MMM", rooms: map[string]chan<- roomCommand{}}
+	s := &server{name: "MMM", db: db, rooms: map[string]chan<- roomCommand{}}
 	var nextUID uid
 	for {
 		conn, err := srv.Accept()
@@ -41,6 +47,8 @@ func serve() error {
 
 type server struct {
 	name string
+
+	db *storage.DB
 
 	roomsMu sync.Mutex
 	rooms   map[string]chan<- roomCommand
@@ -74,9 +82,19 @@ func (srv *server) openRoom(roomName string) chan<- roomCommand {
 		srv.rooms[roomName] = ch
 		rCh = ch
 		r := &room{name: roomName, players: map[uid]player{}}
-		go r.run(ch)
+		go func() {
+			r.run(ch)
+			srv.closeRoom(roomName)
+		}()
 	}
 	return rCh
+}
+
+func (srv *server) closeRoom(roomName string) {
+	srv.roomsMu.Lock()
+	defer srv.roomsMu.Unlock()
+
+	delete(srv.rooms, roomName)
 }
 
 type clientConn struct {
@@ -135,7 +153,7 @@ func (conn *clientConn) serve() {
 		log.Printf("unexpected message (awaiting connection) from %s: %v", conn.RemoteAddr(), msg)
 	}
 
-awaitReady:
+awaitReadyOrJoin:
 	for {
 		msg, ok := <-clientMessages
 		if !ok {
@@ -163,7 +181,12 @@ awaitReady:
 			roomCommands = conn.server.openRoom(msg.Room)
 			p := player{nickname: msg.Nickname, roomMessages: roomMessages}
 			roomCommands <- join(conn.uid, p)
-			break awaitReady
+			break awaitReadyOrJoin
+		case mwproto.JoinMessage:
+			_, err := conn.server.db.PendingItems(int(msg.PlayerID), int(msg.RandoID))
+			if err != nil {
+				log.Printf("find pending items for player %d in rando %d: %v", msg.PlayerID, msg.RandoID, err)
+			}
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %v", conn.RemoteAddr(), msg)
 		}
@@ -189,7 +212,7 @@ awaitReady:
 				roomCommands <- leave(conn.uid)
 				roomCommands = nil
 				roomMessages = nil
-				goto awaitReady
+				goto awaitReadyOrJoin
 			case mwproto.InitiateGameMessage:
 				if !(msg.RandomizationAlgorithm == 0.0 || msg.RandomizationAlgorithm == "Default") {
 					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
@@ -228,6 +251,13 @@ awaitReady:
 				if err := mwproto.Write(conn, mwproto.ResultMessage(msg)); err != nil {
 					log.Printf("send rando result to %s: %v", conn.RemoteAddr(), err)
 				}
+				roomCommands <- leave(conn.uid)
+				roomCommands = nil
+				// this may lead to timeouts in the room if other message
+				// sends for us were queued up after the rando result was
+				// calculated
+				roomMessages = nil
+				goto awaitReadyOrJoin
 			}
 		}
 	}
