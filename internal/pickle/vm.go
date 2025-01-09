@@ -6,19 +6,34 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"slices"
 	"strings"
 )
 
 const (
 	opcodeMARK             = 0x28
+	opcodeEMPTY_TUPLE      = 0x29
 	opcodeBININT           = 0x4a
 	opcodeBININT1          = 0x4b
 	opcodeBININT2          = 0x4d
 	opcodeBINUNICODE       = 0x58
+	opcodeEMPTY_LIST       = 0x5d
+	opcodeAPPEND           = 0x61
+	opcodeAPPENDS          = 0x65
+	opcodeBINGET           = 0x68
+	opcodeLONG_BINGET      = 0x70
+	opcodeSETITEM          = 0x73
+	opcodeTUPLE            = 0x74
+	opcodeSETITEMS         = 0x75
 	opcodeEMPTY_DICT       = 0x7d
 	opcodePROTO            = 0x80
+	opcodeTUPLE1           = 0x85
+	opcodeTUPLE2           = 0x86
+	opcodeTUPLE3           = 0x87
 	opcodeSHORT_BINUNICODE = 0x8c
 	opcodeBINUNICODE8      = 0x8d
+	opcodeSTACK_GLOBAL     = 0x93
 	opcodeMEMOIZE          = 0x94
 	opcodeFRAME            = 0x95
 )
@@ -55,8 +70,24 @@ func (vm *machine) exec() error {
 			vm.mark()
 		case opcodeEMPTY_DICT:
 			vm.emptyDict()
+		case opcodeEMPTY_LIST:
+			vm.emptyList()
+		case opcodeEMPTY_TUPLE:
+			vm.emptyTuple()
+		case opcodeTUPLE:
+			err = vm.tuple()
+		case opcodeTUPLE1:
+			err = vm.tuple1()
+		case opcodeTUPLE2:
+			err = vm.tuple2()
+		case opcodeTUPLE3:
+			err = vm.tuple3()
 		case opcodeMEMOIZE:
 			err = vm.memoize()
+		case opcodeBINGET:
+			err = vm.binGet()
+		case opcodeLONG_BINGET:
+			err = vm.longBinGet()
 		case opcodeFRAME:
 			err = vm.frame()
 		case opcodeSHORT_BINUNICODE:
@@ -71,6 +102,16 @@ func (vm *machine) exec() error {
 			err = vm.binint1()
 		case opcodeBININT2:
 			err = vm.binint2()
+		case opcodeSTACK_GLOBAL:
+			err = vm.stackGlobal()
+		case opcodeAPPEND:
+			err = vm.append()
+		case opcodeAPPENDS:
+			err = vm.appends()
+		case opcodeSETITEM:
+			err = vm.setItem()
+		case opcodeSETITEMS:
+			err = vm.setItems()
 		default:
 			return fmt.Errorf("invalid opcode: %02x", opcode)
 		}
@@ -86,8 +127,10 @@ func (vm *machine) frame() error {
 	return err
 }
 
-var errEmptyStack = errors.New("empty stack")
+var errEmptyStack = errors.New("stack underflow")
 var errStringTooLong = errors.New("string too long")
+var errUnexpectedMarkArg = errors.New("unexpected mark as argument")
+var errUnpairedKey = errors.New("unpaired dictionary key")
 
 func (vm *machine) memoize() error {
 	if len(vm.stack) == 0 {
@@ -97,8 +140,202 @@ func (vm *machine) memoize() error {
 	return nil
 }
 
-func (vm *machine) emptyDict() { vm.stack = append(vm.stack, map[any]any{}) }
-func (vm *machine) mark()      { vm.stack = append(vm.stack, mark{}) }
+func (vm *machine) binGet() error {
+	b, err := vm.src.ReadByte()
+	if err != nil {
+		return err
+	}
+	return vm.pushMemo(int64(b))
+}
+
+func (vm *machine) longBinGet() error {
+	i, err := vm.readUint32()
+	if err != nil {
+		return err
+	}
+	return vm.pushMemo(int64(i))
+}
+
+func (vm *machine) pushMemo(i int64) error {
+	if i >= int64(len(vm.memo)) {
+		return fmt.Errorf("memo index %d out of bounds (memo size was %d)", i, len(vm.memo))
+	}
+	vm.stack = append(vm.stack, vm.memo[i])
+	return nil
+}
+
+func (vm *machine) stackGlobal() error {
+	v, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	attr, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("attribute name is %T, expected string", v)
+	}
+	v, err = vm.pop()
+	if err != nil {
+		return err
+	}
+	module, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("module name is %T, expected string", v)
+	}
+	vm.stack = append(vm.stack, Symbol{Module: module, Attr: attr})
+	return nil
+}
+
+func (vm *machine) emptyList()  { vm.stack = append(vm.stack, new([]any)) }
+func (vm *machine) emptyDict()  { vm.stack = append(vm.stack, map[any]any{}) }
+func (vm *machine) emptyTuple() { vm.stack = append(vm.stack, [0]any{}) }
+func (vm *machine) mark()       { vm.stack = append(vm.stack, mark{}) }
+
+func (vm *machine) tuple() error {
+	items, err := vm.popUntilMark()
+	if err != nil {
+		return err
+	}
+	tuple := reflect.New(reflect.ArrayOf(len(items), reflect.TypeFor[any]()))
+	s := tuple.Elem().Slice(0, len(items)).Interface().([]any)
+	copy(s, items)
+	vm.stack = append(vm.stack, tuple.Elem().Interface())
+	return nil
+}
+
+func (vm *machine) tuple1() error {
+	v1, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	vm.stack = append(vm.stack, Tuple{[1]any{v1}})
+	return nil
+}
+
+func (vm *machine) tuple2() error {
+	v2, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	v1, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	vm.stack = append(vm.stack, Tuple{[2]any{v1, v2}})
+	return nil
+}
+
+func (vm *machine) tuple3() error {
+	v3, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	v2, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	v1, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	vm.stack = append(vm.stack, Tuple{[3]any{v1, v2, v3}})
+	return nil
+}
+
+func (vm *machine) append() error {
+	item, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	target, err := vm.peek()
+	if err != nil {
+		return err
+	}
+	list, ok := target.(*[]any)
+	if !ok {
+		return fmt.Errorf("target for APPEND is %T, wanted a list", target)
+	}
+	*list = append(*list, item)
+	return nil
+}
+
+func (vm *machine) appends() error {
+	items, err := vm.popUntilMark()
+	if err != nil {
+		return err
+	}
+	target, err := vm.peek()
+	if err != nil {
+		return err
+	}
+	list, ok := target.(*[]any)
+	if !ok {
+		return fmt.Errorf("target for APPENDS is %T, wanted a list", target)
+	}
+	*list = append(*list, items...)
+	return nil
+}
+
+func (vm *machine) setItem() error {
+	value, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	key, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	if err := checkDictKey(key); err != nil {
+		return err
+	}
+	target, err := vm.peek()
+	if err != nil {
+		return err
+	}
+	dict, ok := target.(map[any]any)
+	if !ok {
+		return fmt.Errorf("target for SETITEM is %T, wanted a dict", target)
+	}
+	dict[key] = value
+	return nil
+}
+
+func (vm *machine) setItems() error {
+	kvps, err := vm.popUntilMark()
+	if err != nil {
+		return err
+	}
+	if len(kvps)%2 != 0 {
+		return errUnpairedKey
+	}
+	target, err := vm.peek()
+	if err != nil {
+		return err
+	}
+	dict, ok := target.(map[any]any)
+	if !ok {
+		return fmt.Errorf("target for SETITEMS is %T, wanted a dict", target)
+	}
+	for i := 0; i < len(kvps); i += 2 {
+		if err := checkDictKey(kvps[i]); err != nil {
+			return err
+		}
+		dict[kvps[i]] = kvps[i+1]
+	}
+	return nil
+}
+
+func checkDictKey(v any) error {
+	switch v.(type) {
+	case int64:
+		return nil
+	case string:
+		return nil
+	case Tuple:
+		return nil
+	default:
+		return fmt.Errorf("dict key has invalid type %T", v)
+	}
+}
 
 func (vm *machine) shortBinunicode() error {
 	size, err := vm.src.ReadByte()
@@ -185,4 +422,34 @@ func (vm *machine) pushString(n uint64) error {
 	}
 	vm.stack = append(vm.stack, s.String())
 	return nil
+}
+
+func (vm *machine) pop() (any, error) {
+	if len(vm.stack) == 0 {
+		return nil, errEmptyStack
+	}
+	v := vm.stack[len(vm.stack)-1]
+	vm.stack = vm.stack[:len(vm.stack)-1]
+	if _, isMark := v.(mark); isMark {
+		return nil, errUnexpectedMarkArg
+	}
+	return v, nil
+}
+
+func (vm *machine) popUntilMark() ([]any, error) {
+	for i, v := range slices.Backward(vm.stack) {
+		if _, isMark := v.(mark); isMark {
+			values := vm.stack[i+1:]
+			vm.stack = vm.stack[:i]
+			return values, nil
+		}
+	}
+	return nil, errEmptyStack
+}
+
+func (vm *machine) peek() (any, error) {
+	if len(vm.stack) == 0 {
+		return nil, errEmptyStack
+	}
+	return vm.stack[len(vm.stack)-1], nil
 }

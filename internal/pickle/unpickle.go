@@ -5,6 +5,15 @@ import (
 	"io"
 )
 
+type Symbol struct {
+	Module string
+	Attr   string
+}
+
+type Tuple struct {
+	array any
+}
+
 func Decode(r io.Reader, p any) error {
 	proto := make([]byte, 2)
 	if _, err := io.ReadFull(r, proto); err != nil {
