@@ -14,25 +14,33 @@ import (
 const (
 	opcodeMARK             = 0x28
 	opcodeEMPTY_TUPLE      = 0x29
+	opcodeSTOP             = 0x2e
 	opcodeBININT           = 0x4a
 	opcodeBININT1          = 0x4b
 	opcodeBININT2          = 0x4d
+	opcodeNONE             = 0x4e
 	opcodeBINUNICODE       = 0x58
+	opcodeREDUCE           = 0x52
 	opcodeEMPTY_LIST       = 0x5d
 	opcodeAPPEND           = 0x61
 	opcodeAPPENDS          = 0x65
 	opcodeBINGET           = 0x68
-	opcodeLONG_BINGET      = 0x70
+	opcodeLONG_BINGET      = 0x6a
 	opcodeSETITEM          = 0x73
 	opcodeTUPLE            = 0x74
 	opcodeSETITEMS         = 0x75
 	opcodeEMPTY_DICT       = 0x7d
 	opcodePROTO            = 0x80
+	opcodeNEWOBJ           = 0x81
 	opcodeTUPLE1           = 0x85
 	opcodeTUPLE2           = 0x86
 	opcodeTUPLE3           = 0x87
+	opcodeNEWTRUE          = 0x88
+	opcodeNEWFALSE         = 0x89
 	opcodeSHORT_BINUNICODE = 0x8c
 	opcodeBINUNICODE8      = 0x8d
+	opcodeEMPTY_SET        = 0x8f
+	opcodeADDITEMS         = 0x90
 	opcodeSTACK_GLOBAL     = 0x93
 	opcodeMEMOIZE          = 0x94
 	opcodeFRAME            = 0x95
@@ -59,11 +67,11 @@ func readerFrom(orig io.Reader) reader {
 	return bufio.NewReader(orig)
 }
 
-func (vm *machine) exec() error {
+func (vm *machine) exec() (any, error) {
 	for {
 		opcode, err := vm.src.ReadByte()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		switch opcode {
 		case opcodeMARK:
@@ -74,6 +82,14 @@ func (vm *machine) exec() error {
 			vm.emptyList()
 		case opcodeEMPTY_TUPLE:
 			vm.emptyTuple()
+		case opcodeEMPTY_SET:
+			vm.emptySet()
+		case opcodeNONE:
+			vm.none()
+		case opcodeNEWTRUE:
+			vm.bool(true)
+		case opcodeNEWFALSE:
+			vm.bool(false)
 		case opcodeTUPLE:
 			err = vm.tuple()
 		case opcodeTUPLE1:
@@ -108,15 +124,23 @@ func (vm *machine) exec() error {
 			err = vm.append()
 		case opcodeAPPENDS:
 			err = vm.appends()
+		case opcodeADDITEMS:
+			err = vm.addItems()
 		case opcodeSETITEM:
 			err = vm.setItem()
 		case opcodeSETITEMS:
 			err = vm.setItems()
+		case opcodeREDUCE, opcodeNEWOBJ:
+			// These two can be treated as equivalent for our purposes, since we
+			// never instantiate any actual Python objects.
+			err = vm.newObj()
+		case opcodeSTOP:
+			return vm.stop()
 		default:
-			return fmt.Errorf("invalid opcode: %02x", opcode)
+			return nil, fmt.Errorf("invalid opcode: %02x", opcode)
 		}
 		if err != nil {
-			return fmt.Errorf("execute opcode %02x: %w", opcode, err)
+			return nil, fmt.Errorf("execute opcode %02x: %w", opcode, err)
 		}
 	}
 }
@@ -188,6 +212,9 @@ func (vm *machine) stackGlobal() error {
 func (vm *machine) emptyList()  { vm.stack = append(vm.stack, new([]any)) }
 func (vm *machine) emptyDict()  { vm.stack = append(vm.stack, map[any]any{}) }
 func (vm *machine) emptyTuple() { vm.stack = append(vm.stack, [0]any{}) }
+func (vm *machine) emptySet()   { vm.stack = append(vm.stack, map[any]struct{}{}) }
+func (vm *machine) none()       { vm.stack = append(vm.stack, nil) }
+func (vm *machine) bool(b bool) { vm.stack = append(vm.stack, b) }
 func (vm *machine) mark()       { vm.stack = append(vm.stack, mark{}) }
 
 func (vm *machine) tuple() error {
@@ -198,7 +225,8 @@ func (vm *machine) tuple() error {
 	tuple := reflect.New(reflect.ArrayOf(len(items), reflect.TypeFor[any]()))
 	s := tuple.Elem().Slice(0, len(items)).Interface().([]any)
 	copy(s, items)
-	vm.stack = append(vm.stack, tuple.Elem().Interface())
+	t := Tuple{array: tuple.Elem().Interface()}
+	vm.stack = append(vm.stack, t)
 	return nil
 }
 
@@ -275,6 +303,25 @@ func (vm *machine) appends() error {
 	return nil
 }
 
+func (vm *machine) addItems() error {
+	items, err := vm.popUntilMark()
+	if err != nil {
+		return err
+	}
+	target, err := vm.peek()
+	if err != nil {
+		return err
+	}
+	set, ok := target.(map[any]struct{})
+	if !ok {
+		return fmt.Errorf("target for SETITEM is %T, wanted a set", target)
+	}
+	for _, item := range items {
+		set[item] = struct{}{}
+	}
+	return nil
+}
+
 func (vm *machine) setItem() error {
 	value, err := vm.pop()
 	if err != nil {
@@ -329,6 +376,8 @@ func checkDictKey(v any) error {
 	case int64:
 		return nil
 	case string:
+		return nil
+	case bool:
 		return nil
 	case Tuple:
 		return nil
@@ -387,6 +436,34 @@ func (vm *machine) binint2() error {
 	}
 	vm.stack = append(vm.stack, int64(n))
 	return nil
+}
+
+func (vm *machine) newObj() error {
+	v, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	args, ok := v.(Tuple)
+	if !ok {
+		return fmt.Errorf("arguments are of type %T, expected Tuple", v)
+	}
+	cls, err := vm.pop()
+	if err != nil {
+		return err
+	}
+	vm.stack = append(vm.stack, Object{Class: cls, Arguments: args})
+	return nil
+}
+
+func (vm *machine) stop() (any, error) {
+	v, err := vm.pop()
+	if err != nil {
+		return nil, err
+	}
+	if len(vm.stack) > 0 {
+		return nil, fmt.Errorf("%d values left in stack after STOP", len(vm.stack))
+	}
+	return v, nil
 }
 
 func (vm *machine) readUint16() (uint16, error) {

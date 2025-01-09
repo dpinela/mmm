@@ -10,6 +10,11 @@ type Symbol struct {
 	Attr   string
 }
 
+type Object struct {
+	Class     any
+	Arguments any
+}
+
 type Tuple struct {
 	array any
 }
@@ -28,9 +33,10 @@ func Decode(r io.Reader, p any) error {
 	vm := machine{
 		src: readerFrom(r),
 	}
-	if err := vm.exec(); err != nil {
+	v, err := vm.exec()
+	if err != nil {
 		return err
 	}
-	*(p.(*any)) = vm.stack[len(vm.stack)-1]
+	*(p.(*any)) = v
 	return nil
 }
