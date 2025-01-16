@@ -3,6 +3,7 @@ package pickle
 import (
 	"fmt"
 	"io"
+	"reflect"
 )
 
 type Symbol struct {
@@ -12,14 +13,14 @@ type Symbol struct {
 
 type Object struct {
 	Class     any
-	Arguments any
+	Arguments Tuple
 }
 
 type Tuple struct {
 	array any
 }
 
-func Decode(r io.Reader, p any) error {
+func Decode[T any](r io.Reader, p *T) error {
 	proto := make([]byte, 2)
 	if _, err := io.ReadFull(r, proto); err != nil {
 		return err
@@ -37,6 +38,5 @@ func Decode(r io.Reader, p any) error {
 	if err != nil {
 		return err
 	}
-	*(p.(*any)) = v
-	return nil
+	return bind(v, reflect.ValueOf(p).Elem())
 }

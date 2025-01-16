@@ -1,0 +1,152 @@
+package pickle
+
+import (
+	"fmt"
+	"reflect"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+func bind(pyobj any, dest reflect.Value) error {
+	switch dest.Kind() {
+	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, ok := pyobj.(int64)
+		if !ok {
+			return fmt.Errorf("expected int, got %T", pyobj)
+		}
+		dest.SetInt(n)
+	case reflect.String:
+		s, ok := pyobj.(string)
+		if !ok {
+			return fmt.Errorf("expected string, got %T", pyobj)
+		}
+		dest.SetString(s)
+	case reflect.Bool:
+		b, ok := pyobj.(bool)
+		if !ok {
+			return fmt.Errorf("expected bool, got %T", pyobj)
+		}
+		dest.SetBool(b)
+	case reflect.Slice:
+		switch pyobj := pyobj.(type) {
+		case *[]any:
+			s := reflect.MakeSlice(dest.Type(), len(*pyobj), len(*pyobj))
+			for i, v := range *pyobj {
+				if err := bind(v, s.Index(i)); err != nil {
+					return wrapError(err, strconv.Itoa(i))
+				}
+			}
+			dest.Set(s)
+		case map[any]struct{}:
+			s := reflect.MakeSlice(dest.Type(), len(pyobj), len(pyobj))
+			i := 0
+			for v := range pyobj {
+				if err := bind(v, s.Index(i)); err != nil {
+					return wrapError(err, strconv.Itoa(i))
+				}
+			}
+			dest.Set(s)
+		case Tuple:
+			t := reflect.ValueOf(pyobj.array)
+			n := t.Len()
+			s := reflect.MakeSlice(dest.Type(), n, n)
+			for i := range n {
+				if err := bind(t.Index(i).Interface(), s.Index(i)); err != nil {
+					return wrapError(err, strconv.Itoa(i))
+				}
+			}
+			dest.Set(s)
+		default:
+			return fmt.Errorf("expected list, set or tuple, got %T", pyobj)
+		}
+	case reflect.Struct:
+		switch pyobj := pyobj.(type) {
+		case map[any]any:
+			t := dest.Type()
+			for i := range t.NumField() {
+				f := t.Field(i)
+				v, ok := pyobj[f.Name]
+				if !ok {
+					v, ok = pyobj[snakeCase(f.Name)]
+				}
+				if !ok {
+					return fmt.Errorf("key %s not found", f.Name)
+				}
+				if err := bind(v, dest.Field(i)); err != nil {
+					return wrapError(err, f.Name)
+				}
+				continue
+			}
+		case Object:
+			args := reflect.ValueOf(pyobj.Arguments.array)
+			nArgs := args.Len()
+			nFields := dest.NumField()
+			if nArgs != nFields {
+				return fmt.Errorf("expected %d arguments, got %d", nFields, nArgs)
+			}
+			for i := range nArgs {
+				if err := bind(args.Index(i).Interface(), dest.Field(i)); err != nil {
+					return wrapError(err, dest.Type().Field(i).Name)
+				}
+			}
+		default:
+			return fmt.Errorf("expected object or dict, got %T", pyobj)
+		}
+	case reflect.Map:
+		dict, ok := pyobj.(map[any]any)
+		if !ok {
+			return fmt.Errorf("expected dict, got %T", pyobj)
+		}
+		m := reflect.MakeMapWithSize(dest.Type(), len(dict))
+		mapType := dest.Type()
+		keyBuf := reflect.New(mapType.Key()).Elem()
+		valueBuf := reflect.New(mapType.Elem()).Elem()
+		for k, v := range dict {
+			if err := bind(k, keyBuf); err != nil {
+				return err
+			}
+			if err := bind(v, valueBuf); err != nil {
+				return err
+			}
+			m.SetMapIndex(keyBuf, valueBuf)
+		}
+		dest.Set(m)
+	default:
+		panic("invalid target type: " + dest.Type().Name())
+	}
+	return nil
+}
+
+var ucPattern = regexp.MustCompile(`\p{Lu}+`)
+
+func snakeCase(name string) string {
+	s := ucPattern.ReplaceAllStringFunc(name, func(x string) string {
+		return "_" + strings.ToLower(x)
+	})
+	// We expect the original name to be an exported struct field,
+	// so it will always start with an uppercase letter.
+	if strings.HasPrefix(s, "_") {
+		s = s[1:]
+	}
+	return s
+}
+
+func wrapError(err error, key string) error {
+	path := []string{key}
+	pe, ok := err.(pathError)
+	if !ok {
+		return pathError{path, err}
+	}
+	path = append(path, pe.path...)
+	return pathError{path, pe.elemError}
+}
+
+type pathError struct {
+	path      []string
+	elemError error
+}
+
+func (err pathError) Error() string {
+	return strings.Join(err.path, ".") + ": " + err.elemError.Error()
+}

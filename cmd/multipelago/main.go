@@ -42,7 +42,9 @@ func serve(opts options) error {
 		return fmt.Errorf("decompress .archipelago: %w", err)
 	}
 	defer zr.Close()
-	var data any
+	var data struct {
+		ConnectNames map[string][]int
+	}
 	if err := pickle.Decode(zr, &data); err != nil {
 		return err
 	}
