@@ -40,6 +40,10 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshalPing(payload), nil
 	case typeReady:
 		return unmarshalReady(payload)
+	case typeReadyConfirm:
+		return unmarshalReadyConfirm(payload)
+	case typeJoin:
+		return unmarshalJoin(payload)
 	case typeUnready:
 		return UnreadyMessage{}, nil
 	case typeInitiateGame:
@@ -70,21 +74,38 @@ func unmarshalReady(payload []byte) (m ReadyMessage, err error) {
 	return
 }
 
-func unmarshalInitiateGame(payload []byte) (m InitiateGameMessage, err error) {
-	raw, _, err := unmarshalBytes(payload)
+func unmarshalReadyConfirm(payload []byte) (m ReadyConfirmMessage, err error) {
+	// skip the Ready field
+	if len(payload) < 4 {
+		err = fmt.Errorf("payload too short: need 4 bytes, got %d", len(payload))
+		return
+	}
+	_, err = unmarshalJSON(payload[4:], &m.Names)
+	return
+}
+
+func unmarshalJoin(payload []byte) (m JoinMessage, err error) {
+	m.DisplayName, payload, err = unmarshalString(payload)
 	if err != nil {
 		return
 	}
-	err = json.Unmarshal(raw, &m)
+	if len(payload) < 9 {
+		err = fmt.Errorf("remaining payload too short: need 5 bytes, got %d", len(payload))
+		return
+	}
+	m.RandoID = int32(byteOrder.Uint32(payload[:4]))
+	m.PlayerID = int32(byteOrder.Uint32(payload[4:8]))
+	m.Mode = payload[8]
+	return
+}
+
+func unmarshalInitiateGame(payload []byte) (m InitiateGameMessage, err error) {
+	_, err = unmarshalJSON(payload, &m)
 	return
 }
 
 func unmarshalRandoGenerated(payload []byte) (m RandoGeneratedMessage, err error) {
-	raw, payload, err := unmarshalBytes(payload)
-	if err != nil {
-		return
-	}
-	err = json.Unmarshal(raw, &m.Items)
+	payload, err = unmarshalJSON(payload, &m.Items)
 	if err != nil {
 		return
 	}
@@ -112,4 +133,13 @@ func unmarshalBytes(payload []byte) (str []byte, remainder []byte, err error) {
 		return payload[start:end], payload[end:], nil
 	}
 	return nil, payload, fmt.Errorf("unterminated string value length: % 02x", payload)
+}
+
+func unmarshalJSON[T any](payload []byte, dest *T) (remainder []byte, err error) {
+	raw, remainder, err := unmarshalBytes(payload)
+	if err != nil {
+		return
+	}
+	err = json.Unmarshal(raw, dest)
+	return
 }

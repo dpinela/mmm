@@ -78,6 +78,25 @@ func (m DisconnectMessage) msgType() messageType {
 
 func (m DisconnectMessage) appendTo(b []byte) []byte { return b }
 
+type JoinMessage struct {
+	DisplayName string
+	RandoID     int32
+	PlayerID    int32
+	Mode        byte
+}
+
+func (JoinMessage) msgType() messageType {
+	return typeJoin
+}
+
+func (m JoinMessage) appendTo(b []byte) []byte {
+	b = appendString(b, m.DisplayName)
+	b = byteOrder.AppendUint32(b, uint32(m.RandoID))
+	b = byteOrder.AppendUint32(b, uint32(m.PlayerID))
+	b = append(b, m.Mode)
+	return b
+}
+
 type ReadyMessage struct {
 	Room          string
 	Nickname      string
@@ -95,7 +114,11 @@ func (m ReadyMessage) msgType() messageType {
 }
 
 func (m ReadyMessage) appendTo(b []byte) []byte {
-	panic("Ready message not meant to be sent from server")
+	b = appendString(b, m.Room)
+	b = appendString(b, m.Nickname)
+	b = append(b, m.Mode)
+	b = appendJSON(b, m.ReadyMetadata)
+	return b
 }
 
 type ReadyConfirmMessage struct {
