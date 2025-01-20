@@ -211,7 +211,7 @@ func (vm *machine) stackGlobal() error {
 
 func (vm *machine) emptyList()  { vm.stack = append(vm.stack, new([]any)) }
 func (vm *machine) emptyDict()  { vm.stack = append(vm.stack, map[any]any{}) }
-func (vm *machine) emptyTuple() { vm.stack = append(vm.stack, [0]any{}) }
+func (vm *machine) emptyTuple() { vm.stack = append(vm.stack, Tuple{[0]any{}}) }
 func (vm *machine) emptySet()   { vm.stack = append(vm.stack, map[any]struct{}{}) }
 func (vm *machine) none()       { vm.stack = append(vm.stack, nil) }
 func (vm *machine) bool(b bool) { vm.stack = append(vm.stack, b) }

@@ -43,19 +43,49 @@ func serve(opts options) error {
 	if len(data.ConnectNames) != 1 {
 		return fmt.Errorf(".archipelago contains %d worlds, expected only one", len(data.ConnectNames))
 	}
-	err = joinServer(opts.mwserver, opts.mwroom, singularKey(data.ConnectNames))
-	return nil
+	err = joinServer(opts.mwserver, opts.mwroom, data)
+	return err
 }
 
-func singularKey(m map[string][]int) string {
+func singularKey[K comparable, V any](m map[K]V) K {
 	for k := range m {
 		return k
 	}
 	panic("singularKey undefined on empty map")
 }
 
+func invert[K, V comparable](m map[K]V, errmsg string) (map[V]K, error) {
+	w := make(map[V]K, len(m))
+	for k, v := range m {
+		if _, isDup := w[v]; isDup {
+			return nil, fmt.Errorf("%s: %v", errmsg, v)
+		}
+		w[v] = k
+	}
+	return w, nil
+}
+
 type apdata struct {
 	ConnectNames map[string][]int
+	Spheres      []map[int][]int
+	Locations    map[int]map[int][]int
+	Datapackage  map[string]apgamedata
+	SlotInfo     map[int]apslot
+}
+
+type apslot struct {
+	Name string
+	Game string
+	Type struct {
+		Code int
+	}
+	GroupMembers []string
+}
+
+type apgamedata struct {
+	ItemNameToID     map[string]int
+	LocationNameToID map[string]int
+	Checksum         string
 }
 
 func readAPFile(name string) (data apdata, err error) {
@@ -88,7 +118,56 @@ func readAPFile(name string) (data apdata, err error) {
 
 var errConnectionLost = errors.New("server stopped responding to pings")
 
-func joinServer(mwserver, mwroom, nickname string) error {
+func joinServer(mwserver, mwroom string, data apdata) error {
+	if len(data.SlotInfo) != 1 {
+		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
+	}
+	slotID := singularKey(data.SlotInfo)
+	slot := data.SlotInfo[slotID]
+	nickname := slot.Name
+	dpkg, ok := data.Datapackage[slot.Game]
+	if !ok {
+		return fmt.Errorf(".archipelago does not contain datapackage for main game %s", slot.Game)
+	}
+	itemNames, err := invert(dpkg.ItemNameToID, "duplicate item ID in datapackage")
+	if err != nil {
+		return err
+	}
+	locationNames, err := invert(dpkg.LocationNameToID, "duplicate location ID in datapackage")
+	if err != nil {
+		return err
+	}
+	placements, ok := data.Locations[slotID]
+	if !ok {
+		return errors.New(".archipelago does not contain location data for its single slot")
+	}
+
+	for i, s := range data.Spheres {
+		fmt.Println("SPHERE", i)
+		for _, loc := range s[slotID] {
+			locName, ok := locationNames[loc]
+			if !ok {
+				locName = "Mystery_Place"
+			}
+			locName = fmt.Sprintf("%s_(%d)", locName, loc)
+			p, ok := placements[loc]
+			if !ok {
+				fmt.Println("\tNOTHING @", locName)
+				continue
+			}
+			if len(p) < 2 {
+				fmt.Println("\tMISSING DATA @", locName)
+				continue
+			}
+			itemName, ok := itemNames[p[0]]
+			if !ok {
+				itemName = "Mystery_Item"
+			}
+			itemName = fmt.Sprintf("%s_(%d)", itemName, p[0])
+			fmt.Printf("\t%s @ %s\n", itemName, locName)
+		}
+	}
+
 	conn, err := net.Dial("tcp", mwserver)
 	if err != nil {
 		return err
@@ -158,6 +237,7 @@ waitingToEnterRoom:
 				log.Printf("denied entry to room %s: %s", mwroom, msg.Description)
 			case mwproto.DisconnectMessage:
 				return errConnectionLost
+			case mwproto.RequestRandoMessage:
 			default:
 				log.Printf("unexpected message while joining room: %#v", msg)
 			}

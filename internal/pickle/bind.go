@@ -45,6 +45,7 @@ func bind(pyobj any, dest reflect.Value) error {
 				if err := bind(v, s.Index(i)); err != nil {
 					return wrapError(err, strconv.Itoa(i))
 				}
+				i++
 			}
 			dest.Set(s)
 		case Tuple:
