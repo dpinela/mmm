@@ -1,0 +1,59 @@
+package main
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/dpinela/mmm/internal/mwproto"
+)
+
+func apToMWPlacements(data apdata) ([]mwproto.Placement, error) {
+	slotID := singularKey(data.SlotInfo)
+	slot := data.SlotInfo[slotID]
+	dpkg, ok := data.Datapackage[slot.Game]
+	if !ok {
+		return nil, fmt.Errorf(".archipelago does not contain datapackage for main game %s", slot.Game)
+	}
+	itemNames, err := invert(dpkg.ItemNameToID, "duplicate item ID in datapackage")
+	if err != nil {
+		return nil, err
+	}
+	locationNames, err := invert(dpkg.LocationNameToID, "duplicate location ID in datapackage")
+	if err != nil {
+		return nil, err
+	}
+	placements, ok := data.Locations[slotID]
+	if !ok {
+		return nil, errors.New(".archipelago does not contain location data for its single slot")
+	}
+	var mwPlacements []mwproto.Placement
+	for _, s := range data.Spheres {
+		for _, loc := range s[slotID] {
+			locName, ok := locationNames[loc]
+			if !ok {
+				locName = "Mystery_Place"
+			}
+			locName = fmt.Sprintf("%s_(%d)", locName, loc)
+			p, ok := placements[loc]
+			if !ok {
+				fmt.Println("\tNOTHING @", locName)
+				continue
+			}
+			if len(p) < 2 {
+				fmt.Println("\tMISSING DATA @", locName)
+				continue
+			}
+			itemName, ok := itemNames[p[0]]
+			if !ok {
+				itemName = "Mystery_Item"
+			}
+			itemName = fmt.Sprintf("%s_(%d)", itemName, p[0])
+
+			mwPlacements = append(mwPlacements, mwproto.Placement{
+				Item:     itemName,
+				Location: locName,
+			})
+		}
+	}
+	return mwPlacements, nil
+}

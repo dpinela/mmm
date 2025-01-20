@@ -48,6 +48,8 @@ func Read(r io.Reader) (Message, error) {
 		return UnreadyMessage{}, nil
 	case typeInitiateGame:
 		return unmarshalInitiateGame(payload)
+	case typeRequestRando:
+		return RequestRandoMessage{}, nil
 	case typeRandoGenerated:
 		return unmarshalRandoGenerated(payload)
 	default:

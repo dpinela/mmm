@@ -125,47 +125,10 @@ func joinServer(mwserver, mwroom string, data apdata) error {
 	slotID := singularKey(data.SlotInfo)
 	slot := data.SlotInfo[slotID]
 	nickname := slot.Name
-	dpkg, ok := data.Datapackage[slot.Game]
-	if !ok {
-		return fmt.Errorf(".archipelago does not contain datapackage for main game %s", slot.Game)
-	}
-	itemNames, err := invert(dpkg.ItemNameToID, "duplicate item ID in datapackage")
-	if err != nil {
-		return err
-	}
-	locationNames, err := invert(dpkg.LocationNameToID, "duplicate location ID in datapackage")
-	if err != nil {
-		return err
-	}
-	placements, ok := data.Locations[slotID]
-	if !ok {
-		return errors.New(".archipelago does not contain location data for its single slot")
-	}
 
-	for i, s := range data.Spheres {
-		fmt.Println("SPHERE", i)
-		for _, loc := range s[slotID] {
-			locName, ok := locationNames[loc]
-			if !ok {
-				locName = "Mystery_Place"
-			}
-			locName = fmt.Sprintf("%s_(%d)", locName, loc)
-			p, ok := placements[loc]
-			if !ok {
-				fmt.Println("\tNOTHING @", locName)
-				continue
-			}
-			if len(p) < 2 {
-				fmt.Println("\tMISSING DATA @", locName)
-				continue
-			}
-			itemName, ok := itemNames[p[0]]
-			if !ok {
-				itemName = "Mystery_Item"
-			}
-			itemName = fmt.Sprintf("%s_(%d)", itemName, p[0])
-			fmt.Printf("\t%s @ %s\n", itemName, locName)
-		}
+	mwPlacements, err := apToMWPlacements(data)
+	if err != nil {
+		return fmt.Errorf("convert AP to MW: %w", err)
 	}
 
 	conn, err := net.Dial("tcp", mwserver)
@@ -262,6 +225,13 @@ waitingToEnterRoom:
 				unansweredPings = 0
 			case mwproto.DisconnectMessage:
 				return errConnectionLost
+			case mwproto.RequestRandoMessage:
+				outbox <- mwproto.RandoGeneratedMessage{
+					Items: map[string][]mwproto.Placement{
+						"Main Item Group": mwPlacements,
+					},
+					Seed: 666_666_666,
+				}
 			default:
 				log.Printf("unexpected message while in room: %#v", msg)
 			}
