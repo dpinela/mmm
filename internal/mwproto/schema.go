@@ -122,6 +122,7 @@ func (m ReadyMessage) appendTo(b []byte) []byte {
 }
 
 type ReadyConfirmMessage struct {
+	Ready int32
 	Names []string
 }
 
@@ -158,7 +159,9 @@ func (m UnreadyMessage) appendTo(b []byte) []byte {
 }
 
 type InitiateGameMessage struct {
-	RandomizationAlgorithm any
+	Options struct {
+		RandomizationAlgorithm any
+	}
 }
 
 func (InitiateGameMessage) msgType() messageType {
@@ -233,6 +236,25 @@ func (m ResultMessage) appendTo(b []byte) []byte {
 	b = appendJSON(b, m.Placements)
 	b = appendJSON(b, m.PlayerItemsPlacements)
 	b = appendString(b, m.GeneratedHash)
+	return b
+}
+
+type DataReceiveMessage struct {
+	Label   string
+	Content string
+	From    string
+	FromID  int32
+}
+
+func (DataReceiveMessage) msgType() messageType {
+	return typeDataReceive
+}
+
+func (m DataReceiveMessage) appendTo(b []byte) []byte {
+	b = appendString(b, m.Label)
+	b = appendString(b, m.Content)
+	b = appendString(b, m.From)
+	b = byteOrder.AppendUint32(b, uint32(m.FromID))
 	return b
 }
 

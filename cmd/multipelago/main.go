@@ -207,6 +207,7 @@ waitingToEnterRoom:
 		}
 	}
 
+waitingForStartMW:
 	for {
 		select {
 		case <-pingTimer.C:
@@ -225,6 +226,8 @@ waitingToEnterRoom:
 				unansweredPings = 0
 			case mwproto.DisconnectMessage:
 				return errConnectionLost
+			case mwproto.ReadyConfirmMessage:
+				log.Printf("players in room: %v", msg.Names)
 			case mwproto.RequestRandoMessage:
 				outbox <- mwproto.RandoGeneratedMessage{
 					Items: map[string][]mwproto.Placement{
@@ -232,8 +235,59 @@ waitingToEnterRoom:
 					},
 					Seed: 666_666_666,
 				}
+				break waitingForStartMW
 			default:
 				log.Printf("unexpected message while in room: %#v", msg)
+			}
+		}
+	}
+
+	var mwResult mwproto.ResultMessage
+
+waitingForResult:
+	for {
+		select {
+		case <-pingTimer.C:
+			unansweredPings++
+			if unansweredPings == reconnectThreshold {
+				return errConnectionLost
+			}
+			outbox <- mwproto.PingMessage{}
+		case msg, ok := <-inbox:
+			if !ok {
+				return errConnectionLost
+			}
+			switch msg := msg.(type) {
+			case mwproto.PingMessage:
+				log.Println("ping")
+				unansweredPings = 0
+			case mwproto.DisconnectMessage:
+				return errConnectionLost
+			case mwproto.ResultMessage:
+				mwResult = msg
+				outbox <- mwproto.JoinMessage{
+					DisplayName: nickname,
+					PlayerID:    mwResult.PlayerID,
+					RandoID:     mwResult.RandoID,
+				}
+				break waitingForResult
+			}
+		}
+	}
+
+	fmt.Println(mwResult)
+
+	for {
+		select {
+		case <-pingTimer.C:
+			unansweredPings++
+			if unansweredPings == reconnectThreshold {
+				return errConnectionLost
+			}
+			outbox <- mwproto.PingMessage{}
+		case _, ok := <-inbox:
+			if !ok {
+				return errConnectionLost
 			}
 		}
 	}

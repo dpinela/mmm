@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 const headerSize = 24
@@ -33,86 +34,76 @@ func Read(r io.Reader) (Message, error) {
 	// SenderUID and MessageID can be ignored.
 	switch msgType {
 	case typeConnect:
-		return ConnectMessage{}, nil
+		return unmarshal[ConnectMessage](payload)
 	case typeDisconnect:
-		return DisconnectMessage{}, nil
+		return unmarshal[DisconnectMessage](payload)
 	case typePing:
-		return unmarshalPing(payload), nil
+		return unmarshal[PingMessage](payload)
 	case typeReady:
-		return unmarshalReady(payload)
+		return unmarshal[ReadyMessage](payload)
 	case typeReadyConfirm:
-		return unmarshalReadyConfirm(payload)
+		return unmarshal[ReadyConfirmMessage](payload)
 	case typeJoin:
-		return unmarshalJoin(payload)
+		return unmarshal[JoinMessage](payload)
 	case typeUnready:
 		return UnreadyMessage{}, nil
 	case typeInitiateGame:
-		return unmarshalInitiateGame(payload)
+		return unmarshal[InitiateGameMessage](payload)
 	case typeRequestRando:
 		return RequestRandoMessage{}, nil
 	case typeRandoGenerated:
-		return unmarshalRandoGenerated(payload)
+		return unmarshal[RandoGeneratedMessage](payload)
+	case typeResult:
+		return unmarshal[ResultMessage](payload)
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}
 }
 
-func unmarshalPing(payload []byte) PingMessage {
-	return PingMessage{byteOrder.Uint32(payload)}
+func unmarshal[T Message](payload []byte) (T, error) {
+	var msg T
+	err := unmarshalInto(payload, reflect.ValueOf(&msg).Elem())
+	return msg, err
 }
 
-func unmarshalReady(payload []byte) (m ReadyMessage, err error) {
-	m.Room, payload, err = unmarshalString(payload)
-	if err != nil {
-		return
+func unmarshalInto(payload []byte, v reflect.Value) error {
+	for i := range v.NumField() {
+		field := v.Field(i)
+		switch field.Kind() {
+		case reflect.Uint8:
+			if len(payload) == 0 {
+				return io.ErrUnexpectedEOF
+			}
+			field.SetUint(uint64(payload[0]))
+			payload = payload[1:]
+		case reflect.Int32:
+			if len(payload) < 4 {
+				return io.ErrUnexpectedEOF
+			}
+			field.SetInt(int64(int32(byteOrder.Uint32(payload[:4]))))
+			payload = payload[4:]
+		case reflect.Uint32:
+			if len(payload) < 4 {
+				return io.ErrUnexpectedEOF
+			}
+			field.SetUint(uint64(byteOrder.Uint32(payload[:4])))
+			payload = payload[4:]
+		case reflect.String:
+			s, rest, err := unmarshalString(payload)
+			if err != nil {
+				return err
+			}
+			payload = rest
+			field.SetString(s)
+		default:
+			rest, err := unmarshalJSON(payload, field.Addr().Interface())
+			if err != nil {
+				return err
+			}
+			payload = rest
+		}
 	}
-	m.Nickname, payload, err = unmarshalString(payload)
-	if err != nil {
-		return
-	}
-	m.Mode = payload[0]
-	rawMetadata, payload, err := unmarshalBytes(payload[1:])
-	err = json.Unmarshal(rawMetadata, &m.ReadyMetadata)
-	return
-}
-
-func unmarshalReadyConfirm(payload []byte) (m ReadyConfirmMessage, err error) {
-	// skip the Ready field
-	if len(payload) < 4 {
-		err = fmt.Errorf("payload too short: need 4 bytes, got %d", len(payload))
-		return
-	}
-	_, err = unmarshalJSON(payload[4:], &m.Names)
-	return
-}
-
-func unmarshalJoin(payload []byte) (m JoinMessage, err error) {
-	m.DisplayName, payload, err = unmarshalString(payload)
-	if err != nil {
-		return
-	}
-	if len(payload) < 9 {
-		err = fmt.Errorf("remaining payload too short: need 5 bytes, got %d", len(payload))
-		return
-	}
-	m.RandoID = int32(byteOrder.Uint32(payload[:4]))
-	m.PlayerID = int32(byteOrder.Uint32(payload[4:8]))
-	m.Mode = payload[8]
-	return
-}
-
-func unmarshalInitiateGame(payload []byte) (m InitiateGameMessage, err error) {
-	_, err = unmarshalJSON(payload, &m)
-	return
-}
-
-func unmarshalRandoGenerated(payload []byte) (m RandoGeneratedMessage, err error) {
-	payload, err = unmarshalJSON(payload, &m.Items)
-	if err != nil {
-		return
-	}
-	m.Seed = int32(byteOrder.Uint32(payload[:4]))
-	return
+	return nil
 }
 
 func unmarshalString(payload []byte) (str string, remainder []byte, err error) {
@@ -137,7 +128,7 @@ func unmarshalBytes(payload []byte) (str []byte, remainder []byte, err error) {
 	return nil, payload, fmt.Errorf("unterminated string value length: % 02x", payload)
 }
 
-func unmarshalJSON[T any](payload []byte, dest *T) (remainder []byte, err error) {
+func unmarshalJSON(payload []byte, dest any) (remainder []byte, err error) {
 	raw, remainder, err := unmarshalBytes(payload)
 	if err != nil {
 		return
