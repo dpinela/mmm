@@ -214,8 +214,8 @@ awaitReadyOrJoin:
 				roomMessages = nil
 				goto awaitReadyOrJoin
 			case mwproto.InitiateGameMessage:
-				if !(msg.RandomizationAlgorithm == 0.0 || msg.RandomizationAlgorithm == "Default") {
-					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.RandomizationAlgorithm)
+				if !(msg.Options.RandomizationAlgorithm == 0.0 || msg.Options.RandomizationAlgorithm == "Default") {
+					log.Printf("invalid randomization algorithm from %s: %v", conn.RemoteAddr(), msg.Options.RandomizationAlgorithm)
 					continue
 				}
 				roomCommands <- (*room).startRandomization

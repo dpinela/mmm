@@ -10,8 +10,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
+	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
 	"github.com/dpinela/mmm/internal/pickle"
 )
@@ -21,6 +24,7 @@ func main() {
 	flag.StringVar(&opts.apfile, "apfile", "./AP.archipelago", "The Archipelago seed to serve")
 	flag.StringVar(&opts.mwserver, "mwserver", "127.0.0.1:38281", "The multiworld server to join")
 	flag.StringVar(&opts.mwroom, "mwroom", "", "The room to join")
+	flag.IntVar(&opts.apport, "apport", 38281, "Serve Archipelago on port `port`")
 	flag.Parse()
 
 	if err := serve(opts); err != nil {
@@ -33,6 +37,7 @@ type options struct {
 	apfile   string
 	mwserver string
 	mwroom   string
+	apport   int
 }
 
 func serve(opts options) error {
@@ -43,7 +48,10 @@ func serve(opts options) error {
 	if len(data.ConnectNames) != 1 {
 		return fmt.Errorf(".archipelago contains %d worlds, expected only one", len(data.ConnectNames))
 	}
-	err = joinServer(opts.mwserver, opts.mwroom, data)
+	if len(data.Version) != approto.VersionNumberSize {
+		return fmt.Errorf("invalid .archipelago version: %v", data.Version)
+	}
+	err = joinServer(opts, data)
 	return err
 }
 
@@ -66,11 +74,23 @@ func invert[K, V comparable](m map[K]V, errmsg string) (map[V]K, error) {
 }
 
 type apdata struct {
-	ConnectNames map[string][]int
-	Spheres      []map[int][]int
-	Locations    map[int]map[int][]int
-	Datapackage  map[string]apgamedata
-	SlotInfo     map[int]apslot
+	ConnectNames  map[string][]int
+	Spheres       []map[int][]int
+	Locations     map[int]map[int][]int
+	Datapackage   map[string]apgamedata
+	SlotInfo      map[int]apslot
+	Version       []int
+	Tags          []string
+	ServerOptions apserveroptions
+	SeedName      string
+}
+
+type apserveroptions struct {
+	LocationCheckPoints int
+	HintCost            int
+	ReleaseMode         string
+	CollectMode         string
+	RemainingMode       string
 }
 
 type apslot struct {
@@ -118,7 +138,7 @@ func readAPFile(name string) (data apdata, err error) {
 
 var errConnectionLost = errors.New("server stopped responding to pings")
 
-func joinServer(mwserver, mwroom string, data apdata) error {
+func joinServer(opts options, data apdata) error {
 	if len(data.SlotInfo) != 1 {
 		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
 	}
@@ -131,7 +151,7 @@ func joinServer(mwserver, mwroom string, data apdata) error {
 		return fmt.Errorf("convert AP to MW: %w", err)
 	}
 
-	conn, err := net.Dial("tcp", mwserver)
+	conn, err := net.Dial("tcp", opts.mwserver)
 	if err != nil {
 		return err
 	}
@@ -169,7 +189,7 @@ func joinServer(mwserver, mwroom string, data apdata) error {
 	}
 
 	outbox <- mwproto.ReadyMessage{
-		Room:          mwroom,
+		Room:          opts.mwroom,
 		Nickname:      nickname,
 		ReadyMetadata: []mwproto.KeyValuePair{},
 	}
@@ -194,10 +214,10 @@ waitingToEnterRoom:
 			case mwproto.PingMessage:
 				unansweredPings = 0
 			case mwproto.ReadyConfirmMessage:
-				log.Printf("joined room %s with players %v", mwroom, msg.Names)
+				log.Printf("joined room %s with players %v", opts.mwroom, msg.Names)
 				break waitingToEnterRoom
 			case mwproto.ReadyDenyMessage:
-				log.Printf("denied entry to room %s: %s", mwroom, msg.Description)
+				log.Printf("denied entry to room %s: %s", opts.mwroom, msg.Description)
 			case mwproto.DisconnectMessage:
 				return errConnectionLost
 			case mwproto.RequestRandoMessage:
@@ -231,7 +251,7 @@ waitingForStartMW:
 			case mwproto.RequestRandoMessage:
 				outbox <- mwproto.RandoGeneratedMessage{
 					Items: map[string][]mwproto.Placement{
-						"Main Item Group": mwPlacements,
+						singularItemGroup: mwPlacements,
 					},
 					Seed: 666_666_666,
 				}
@@ -277,6 +297,91 @@ waitingForResult:
 
 	fmt.Println(mwResult)
 
+	games := make([]string, len(mwResult.Nicknames))
+	checksums := make([]string, len(mwResult.Nicknames))
+	dataPackages := map[string]*approto.DataPackage{}
+	for i, name := range mwResult.Nicknames {
+		if i == int(mwResult.PlayerID) {
+			games[i] = slot.Game
+		} else {
+			games[i] = fmt.Sprintf("%s's World", name)
+		}
+		dataPackages[games[i]] = &approto.DataPackage{
+			LocationNameToID: map[string]int{fakeLocationName: fakeLocationID},
+			ItemNameToID:     map[string]int{},
+		}
+	}
+
+	nextSynthItemID := 1
+	nextSynthLocationID := 1
+	for _, p := range mwResult.Placements[singularItemGroup] {
+		pid, item, ok := parseQualifiedName(p.Item)
+		if !ok {
+			log.Println("invalid MW item:", p.Item)
+			continue
+		}
+		if !(pid >= 0 && pid < len(games)) {
+			log.Println("MW item has world out of range:", p.Item)
+			continue
+		}
+		game := games[pid]
+		dp := dataPackages[game]
+		if _, ok := dp.ItemNameToID[item]; !ok {
+			dp.ItemNameToID[item] = nextSynthItemID
+			nextSynthItemID++
+		}
+	}
+	for _, qualifiedLoc := range mwResult.PlayerItemsPlacements {
+		pid, loc, ok := parseQualifiedName(qualifiedLoc)
+		if !ok {
+			log.Println("invalid MW location:", qualifiedLoc)
+			continue
+		}
+		if !(pid >= 0 && pid < len(games)) {
+			log.Println("MW location has world out of range:", qualifiedLoc)
+			continue
+		}
+		game := games[pid]
+		dp := dataPackages[game]
+		if _, ok := dp.LocationNameToID[loc]; !ok {
+			dp.LocationNameToID[loc] = nextSynthLocationID
+			nextSynthLocationID++
+		}
+	}
+	for i, g := range games {
+		if i == int(mwResult.PlayerID) {
+			checksums[i] = data.Datapackage[slot.Game].Checksum
+		} else {
+			dp := dataPackages[g]
+			dp.SetChecksum()
+			checksums[i] = dp.Checksum
+		}
+	}
+
+	roomInfo := approto.RoomInfo{
+		Cmd:     "RoomInfo",
+		Version: apServerVersion,
+		// This would panic if data.Version is not of the
+		// correct length, but we check for this right after
+		// loading the .archipelago file.
+		GeneratorVersion: approto.MakeVersion(*(*[approto.VersionNumberSize]int)(data.Version)),
+		Tags:             data.Tags,
+		Password:         false,
+		Permissions: approto.RoomPermissions{
+			Release:   approto.PermissionForMode(data.ServerOptions.ReleaseMode),
+			Collect:   approto.PermissionForMode(data.ServerOptions.CollectMode),
+			Remaining: approto.PermissionForMode(data.ServerOptions.RemainingMode),
+		},
+		HintCost:             data.ServerOptions.HintCost,
+		LocationCheckPoints:  data.ServerOptions.LocationCheckPoints,
+		Games:                games,
+		DataPackageChecksums: checksums,
+		SeedName:             data.SeedName,
+		// Time will be set by approto.Serve
+	}
+
+	apInbox, _ := approto.Serve(opts.apport, roomInfo)
+
 	for {
 		select {
 		case <-pingTimer.C:
@@ -285,12 +390,52 @@ waitingForResult:
 				return errConnectionLost
 			}
 			outbox <- mwproto.PingMessage{}
-		case _, ok := <-inbox:
+		case msg, ok := <-inbox:
 			if !ok {
 				return errConnectionLost
 			}
+			switch msg.(type) {
+			case mwproto.PingMessage:
+				unansweredPings = 0
+			}
+		case msg := <-apInbox:
+			fmt.Println(msg)
 		}
 	}
+}
+
+func parseQualifiedName(name string) (pid int, item string, ok bool) {
+	const prefix = "MW("
+
+	if !strings.HasPrefix(name, prefix) {
+		return
+	}
+	qualifier, item, ok := strings.Cut(name[len(prefix):], ")_")
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseInt(qualifier, 10, 32)
+	if err != nil {
+		ok = false
+		return
+	}
+	return int(n), item, ok
+}
+
+// This is the main item group used by the HK rando as well as
+// the sole item group used by Haiku and Death's Door for multiworld
+// purposes.
+const singularItemGroup = "Main Item Group"
+
+const (
+	fakeLocationName = "Somewhere"
+	fakeLocationID   = 1
+)
+
+var apServerVersion = approto.Version{
+	Minor: 5,
+	Build: 1,
+	Class: "Version",
 }
 
 func sendMessages(conn net.Conn, messages <-chan mwproto.Message) {
