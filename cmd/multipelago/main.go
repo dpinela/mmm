@@ -79,6 +79,7 @@ type apdata struct {
 	Locations     map[int]map[int][]int
 	Datapackage   map[string]apgamedata
 	SlotInfo      map[int]apslot
+	SlotData      map[int]map[string]any
 	Version       []int
 	Tags          []string
 	ServerOptions apserveroptions
@@ -285,17 +286,10 @@ waitingForResult:
 				return errConnectionLost
 			case mwproto.ResultMessage:
 				mwResult = msg
-				outbox <- mwproto.JoinMessage{
-					DisplayName: nickname,
-					PlayerID:    mwResult.PlayerID,
-					RandoID:     mwResult.RandoID,
-				}
 				break waitingForResult
 			}
 		}
 	}
-
-	fmt.Println(mwResult)
 
 	games := make([]string, len(mwResult.Nicknames))
 	checksums := make([]string, len(mwResult.Nicknames))
@@ -307,7 +301,7 @@ waitingForResult:
 			games[i] = fmt.Sprintf("%s's World", name)
 		}
 		dataPackages[games[i]] = &approto.DataPackage{
-			LocationNameToID: map[string]int{fakeLocationName: fakeLocationID},
+			LocationNameToID: map[string]int{},
 			ItemNameToID:     map[string]int{},
 		}
 	}
@@ -380,7 +374,10 @@ waitingForResult:
 		// Time will be set by approto.Serve
 	}
 
-	apInbox, _ := approto.Serve(opts.apport, roomInfo)
+	var locationsCleared []int = []int{}
+	var itemsSent []approto.NetworkItem
+
+	apInbox, apOutbox := approto.Serve(opts.apport, roomInfo)
 
 	for {
 		select {
@@ -394,12 +391,105 @@ waitingForResult:
 			if !ok {
 				return errConnectionLost
 			}
-			switch msg.(type) {
+			switch msg := msg.(type) {
 			case mwproto.PingMessage:
 				unansweredPings = 0
+			case mwproto.DataReceiveMessage:
+				if msg.Label != mwproto.LabelMultiworldItem {
+					log.Println("unknown label for received item:", msg.Label)
+					continue
+				}
+				if !(msg.FromID >= 0 && int(msg.FromID) < len(games)) {
+					log.Println("invalid FromID:", msg.FromID)
+					continue
+				}
+				ownPkg := dataPackages[games[mwResult.PlayerID]]
+				itemID := ownPkg.ItemNameToID[msg.Content]
+				locID := 0
+				if loc, ok := mwResult.PlayerItemsPlacements[msg.Content]; ok {
+					_, loc, ok = parseQualifiedName(loc)
+					if ok {
+						fromPkg := dataPackages[games[msg.FromID]]
+						locID = fromPkg.LocationNameToID[loc]
+					}
+				}
+				ni := approto.NetworkItem{
+					Item:     itemID,
+					Location: locID,
+					Player:   int(msg.FromID),
+					Flags:    0,
+				}
+				apOutbox <- approto.ReceivedItems{
+					Index: len(itemsSent),
+					Items: []approto.NetworkItem{ni},
+				}
+				itemsSent = append(itemsSent, ni)
 			}
 		case msg := <-apInbox:
-			fmt.Println(msg)
+			if msg == nil {
+				return errConnectionLost
+			}
+			switch msg := msg.(type) {
+			case approto.GetDataPackage:
+				resp := approto.MakeDataPackageMessage()
+				pickedGames := msg.Games
+				if pickedGames == nil {
+					pickedGames = append([]string{slot.Game}, games...)
+				}
+				for _, g := range pickedGames {
+					if g == slot.Game {
+						resp.Data.Games[g] = data.Datapackage[slot.Game]
+					} else {
+						resp.Data.Games[g] = dataPackages[g]
+					}
+				}
+				apOutbox <- resp
+			case approto.Connect:
+				outbox <- mwproto.JoinMessage{
+					PlayerID: mwResult.PlayerID,
+					RandoID:  mwResult.RandoID,
+				}
+				players := make([]approto.NetworkPlayer, len(mwResult.Nicknames))
+				slots := make(map[int]approto.NetworkSlot, len(mwResult.Nicknames))
+				nextSlot := slotID + 1
+				for i, nick := range mwResult.Nicknames {
+					slot := slotID
+					if i != int(mwResult.PlayerID) {
+						slot = nextSlot
+						nextSlot++
+					}
+					players[i] = approto.NetworkPlayer{
+						Team:  0,
+						Slot:  slot,
+						Alias: nick,
+						Name:  nick,
+					}
+					slots[slot] = approto.NetworkSlot{
+						Name:         nick,
+						Game:         games[i],
+						Type:         approto.SlotTypePlayer,
+						GroupMembers: []int{},
+					}
+				}
+				var missingLocations []int
+				for _, locID := range data.Datapackage[slot.Game].LocationNameToID {
+					missingLocations = append(missingLocations, locID)
+				}
+				resp := approto.Connected{
+					Cmd:              "Connected",
+					Team:             0,
+					Slot:             slotID,
+					Players:          players,
+					SlotInfo:         slots,
+					CheckedLocations: locationsCleared,
+					MissingLocations: missingLocations,
+					HintPoints:       0,
+				}
+				if msg.SlotData {
+					resp.SlotData = data.SlotData[slotID]
+				}
+				apOutbox <- resp
+			}
 		}
 	}
 }

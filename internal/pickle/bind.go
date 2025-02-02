@@ -113,6 +113,8 @@ func bind(pyobj any, dest reflect.Value) error {
 			m.SetMapIndex(keyBuf, valueBuf)
 		}
 		dest.Set(m)
+	case reflect.Interface:
+		dest.Set(reflect.ValueOf(pyobj))
 	default:
 		panic("invalid target type: " + dest.Type().Name())
 	}

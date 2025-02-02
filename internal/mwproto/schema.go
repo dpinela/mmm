@@ -258,6 +258,8 @@ func (m DataReceiveMessage) appendTo(b []byte) []byte {
 	return b
 }
 
+const LabelMultiworldItem = "MultiWorld-Item"
+
 type Placement struct {
 	Item     string `json:"Item1"`
 	Location string `json:"Item2"`

@@ -22,14 +22,25 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 			log.Println(err)
 			return
 		}
+		log.Println("accepted AP connection")
 		defer apconn.CloseNow()
 		n := numConnections.Load()
 		if !(n == 0 && numConnections.CompareAndSwap(n, n+1)) {
+			log.Println("too many AP clients")
 			return
 		}
+		log.Println("let AP connection through")
 		// signal disconnection
 		defer func() { inboxCh <- nil }()
 		ctx := r.Context()
+
+		ri := roomInfo
+		ri.Time = float64(time.Now().UnixMilli()) / float64(time.Millisecond)
+		if err := wsjson.Write(ctx, apconn, []ServerMessage{ri}); err != nil {
+			log.Println("error writing RoomInfo:", err)
+			return
+		}
+
 		go func() {
 			for {
 				select {
@@ -37,17 +48,16 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 					if !ok {
 						return
 					}
+					log.Printf("sending %+v", msg)
 					if err := wsjson.Write(ctx, apconn, []ServerMessage{msg}); err != nil {
 						log.Println("error writing AP message:", err)
 					}
 				case <-ctx.Done():
+					log.Println("done writing")
 					return
 				}
 			}
 		}()
-		ri := roomInfo
-		ri.Time = float64(time.Now().UnixMilli()) / float64(time.Millisecond)
-		outboxCh <- ri
 
 		var (
 			buf            packet
@@ -63,7 +73,24 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 					log.Println("error parsing AP command:", err)
 					continue
 				}
-				log.Println("unknown client message:", unknownMessage.Cmd)
+				var (
+					cmsg ClientMessage
+					err  error
+				)
+				switch unknownMessage.Cmd {
+				case "Connect":
+					cmsg, err = tryParse[Connect](msg)
+				case "GetDataPackage":
+					cmsg, err = tryParse[GetDataPackage](msg)
+				default:
+					log.Println("unknown client message:", unknownMessage.Cmd)
+					continue
+				}
+				if err != nil {
+					log.Printf("error parsing %s: %v", unknownMessage.Cmd, err)
+					continue
+				}
+				inboxCh <- cmsg
 			}
 		}
 	})
@@ -75,6 +102,14 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 		}
 	}()
 	return inboxCh, outboxCh
+}
+
+func tryParse[T ClientMessage](msg json.RawMessage) (ClientMessage, error) {
+	var parsedMsg T
+	if err := json.Unmarshal(msg, &parsedMsg); err != nil {
+		return nil, fmt.Errorf("error parsing %T: %v", parsedMsg, err)
+	}
+	return parsedMsg, nil
 }
 
 type packet []json.RawMessage

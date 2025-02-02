@@ -85,3 +85,101 @@ func (dp *DataPackage) SetChecksum() {
 	}
 	dp.Checksum = fmt.Sprintf("%02x", sha.Sum(make([]byte, 0, sha256.Size)))
 }
+
+type GetDataPackage struct {
+	Games []string
+}
+
+func (GetDataPackage) isClientMessage() {}
+
+type DataPackageMessage struct {
+	Cmd  string          `json:"cmd"`
+	Data DataPackageData `json:"data"`
+}
+
+type DataPackageData struct {
+	// Uses [any] as the value type so that the original data package
+	// from the generator can be passed through unchanged.
+	Games map[string]any `json:"games"`
+}
+
+func (DataPackageMessage) isServerMessage() {}
+
+func MakeDataPackageMessage() DataPackageMessage {
+	return DataPackageMessage{
+		Cmd:  "DataPackage",
+		Data: DataPackageData{Games: map[string]any{}},
+	}
+}
+
+type Connect struct {
+	Password      string
+	Game          string
+	Name          string
+	UUID          string
+	Version       Version
+	ItemsHandling *ItemHandlingMode `json:"items_handling"`
+	Tags          []string
+	SlotData      bool
+}
+
+func (Connect) isClientMessage() {}
+
+type ItemHandlingMode int
+
+const (
+	ReceiveOthersItems ItemHandlingMode = 1 << iota
+	AcceptOwnItems
+	AcceptStartingItems
+)
+
+type Connected struct {
+	Cmd              string              `json:"cmd"`
+	Team             int                 `json:"team"`
+	Slot             int                 `json:"slot"`
+	Players          []NetworkPlayer     `json:"players"`
+	MissingLocations []int               `json:"missing_locations"`
+	CheckedLocations []int               `json:"checked_locations"`
+	SlotData         map[string]any      `json:"slot_data"`
+	SlotInfo         map[int]NetworkSlot `json:"slot_info"`
+	HintPoints       int                 `json:"hint_points"`
+}
+
+func (Connected) isServerMessage() {}
+
+type NetworkPlayer struct {
+	Team  int    `json:"team"`
+	Slot  int    `json:"slot"`
+	Alias string `json:"alias"`
+	Name  string `json:"name"`
+}
+
+type NetworkSlot struct {
+	Name         string   `json:"name"`
+	Game         string   `json:"game"`
+	Type         SlotType `json:"type"`
+	GroupMembers []int    `json:"group_members"`
+}
+
+type SlotType int
+
+const (
+	SlotTypeSpectator SlotType = iota
+	SlotTypePlayer
+	SlotTypeGroup
+)
+
+type ReceivedItems struct {
+	Cmd   string        `json:"cmd"`
+	Index int           `json:"index"`
+	Items []NetworkItem `json:"items"`
+}
+
+func (ReceivedItems) isServerMessage() {}
+
+type NetworkItem struct {
+	Item     int `json:"item"`
+	Location int `json:"location"`
+	Player   int `json:"player"`
+	Flags    int `json:"flags"`
+}
