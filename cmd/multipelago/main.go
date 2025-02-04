@@ -79,7 +79,7 @@ type apdata struct {
 	Locations     map[int]map[int][]int
 	Datapackage   map[string]apgamedata
 	SlotInfo      map[int]apslot
-	SlotData      map[int]map[string]any
+	SlotData      map[int]map[string]any `pickle:"require_string_keys"`
 	Version       []int
 	Tags          []string
 	ServerOptions apserveroptions
@@ -107,6 +107,7 @@ type apgamedata struct {
 	ItemNameToID     map[string]int
 	LocationNameToID map[string]int
 	Checksum         string
+	Original         map[string]any `pickle:"require_string_keys,remainder"`
 }
 
 func readAPFile(name string) (data apdata, err error) {
@@ -374,11 +375,35 @@ waitingForResult:
 		// Time will be set by approto.Serve
 	}
 
-	var locationsCleared []int = []int{}
-	var itemsSent []approto.NetworkItem
+	var (
+		locationsCleared = []int{}
+		itemsSent        []approto.NetworkItem
+		dataStorage      = apDataStorage{}
+	)
+
+	for i := range mwResult.Nicknames {
+		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"hints_0_%d", i+1)] = []any{}
+		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"client_status_0_%d", i+1)] = approto.ClientStatusUnknown
+		itemGroupsKey := approto.ReadOnlyKeyPrefix + "item_name_groups_%s" + games[i]
+		locationGroupsKey := approto.ReadOnlyKeyPrefix + "location_name_groups_" + games[i]
+		if i == int(mwResult.PlayerID) {
+			dpkg := data.Datapackage[slot.Game]
+			dataStorage[itemGroupsKey] = dpkg.Original["item_name_groups"]
+			dataStorage[locationGroupsKey] = dpkg.Original["location_name_groups"]
+		} else {
+			dataStorage[itemGroupsKey] = map[string][]string{}
+			dataStorage[locationGroupsKey] = map[string][]string{}
+		}
+	}
+	dataStorage[approto.ReadOnlyKeyPrefix+"race_mode"] = 0
+	dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", slotID)] = data.SlotData[slotID]
+	for i := range mwResult.Nicknames {
+		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", slotID+i+1)] = map[string]any{}
+	}
 
 	apInbox, apOutbox := approto.Serve(opts.apport, roomInfo)
 
+mainMessageLoop:
 	for {
 		select {
 		case <-pingTimer.C:
@@ -434,7 +459,7 @@ waitingForResult:
 				resp := approto.MakeDataPackageMessage()
 				pickedGames := msg.Games
 				if pickedGames == nil {
-					pickedGames = append([]string{slot.Game}, games...)
+					pickedGames = games
 				}
 				for _, g := range pickedGames {
 					if g == slot.Game {
@@ -489,6 +514,30 @@ waitingForResult:
 					resp.SlotData = data.SlotData[slotID]
 				}
 				apOutbox <- resp
+			case approto.SetMessage:
+				oldV, newV, err := dataStorage.apply(msg)
+				if err != nil {
+					log.Println(err)
+					continue mainMessageLoop
+				}
+				if msg.WantReply {
+					apOutbox <- approto.SetReplyMessage{
+						Cmd:           "SetReply",
+						Key:           msg.Key,
+						Value:         newV,
+						OriginalValue: oldV,
+						Slot:          slotID,
+					}
+				}
+			case approto.GetMessage:
+				values := make(map[string]any, len(msg.Keys))
+				for _, k := range msg.Keys {
+					values[k] = dataStorage[k]
+				}
+				apOutbox <- approto.RetrievedMessage{
+					Keys: values,
+					Rest: msg.Rest,
+				}
 			}
 		}
 	}

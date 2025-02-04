@@ -183,3 +183,51 @@ type NetworkItem struct {
 	Player   int `json:"player"`
 	Flags    int `json:"flags"`
 }
+
+type SetMessage struct {
+	Key        string
+	Default    any
+	WantReply  bool `json:"want_reply"`
+	Operations []DataStorageOperation
+}
+
+const ReadOnlyKeyPrefix = "_read_"
+
+func (SetMessage) isClientMessage() {}
+
+type DataStorageOperation struct {
+	Operation string
+	Value     any
+}
+
+type SetReplyMessage struct {
+	Cmd           string `json:"cmd"`
+	Key           string `json:"key"`
+	Value         any    `json:"value"`
+	OriginalValue any    `json:"original_value"`
+	Slot          int    `json:"slot"`
+}
+
+func (SetReplyMessage) isServerMessage() {}
+
+type GetMessage struct {
+	Keys []string
+	Rest map[string]any
+}
+
+func (GetMessage) isClientMessage() {}
+
+type RetrievedMessage struct {
+	Keys map[string]any
+	Rest map[string]any
+}
+
+func (RetrievedMessage) isServerMessage() {}
+
+const (
+	ClientStatusUnknown   = 0
+	ClientStatusConnected = 5
+	ClientStatusReady     = 10
+	ClientStatusPlaying   = 20
+	ClientStatusGoal      = 30
+)

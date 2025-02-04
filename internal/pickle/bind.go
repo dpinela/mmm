@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
 
-func bind(pyobj any, dest reflect.Value) error {
+type StringMap map[string]any
+
+func bind(pyobj any, dest reflect.Value, requireStringKeys bool) error {
 	switch dest.Kind() {
 	case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
 		n, ok := pyobj.(int64)
@@ -33,7 +36,7 @@ func bind(pyobj any, dest reflect.Value) error {
 		case *[]any:
 			s := reflect.MakeSlice(dest.Type(), len(*pyobj), len(*pyobj))
 			for i, v := range *pyobj {
-				if err := bind(v, s.Index(i)); err != nil {
+				if err := bind(v, s.Index(i), requireStringKeys); err != nil {
 					return wrapError(err, strconv.Itoa(i))
 				}
 			}
@@ -42,7 +45,7 @@ func bind(pyobj any, dest reflect.Value) error {
 			s := reflect.MakeSlice(dest.Type(), len(pyobj), len(pyobj))
 			i := 0
 			for v := range pyobj {
-				if err := bind(v, s.Index(i)); err != nil {
+				if err := bind(v, s.Index(i), requireStringKeys); err != nil {
 					return wrapError(err, strconv.Itoa(i))
 				}
 				i++
@@ -53,7 +56,7 @@ func bind(pyobj any, dest reflect.Value) error {
 			n := t.Len()
 			s := reflect.MakeSlice(dest.Type(), n, n)
 			for i := range n {
-				if err := bind(t.Index(i).Interface(), s.Index(i)); err != nil {
+				if err := bind(t.Index(i).Interface(), s.Index(i), requireStringKeys); err != nil {
 					return wrapError(err, strconv.Itoa(i))
 				}
 			}
@@ -67,19 +70,28 @@ func bind(pyobj any, dest reflect.Value) error {
 			t := dest.Type()
 			for i := range t.NumField() {
 				f := t.Field(i)
-				v, ok := pyobj[f.Name]
-				if !ok {
-					v, ok = pyobj[snakeCase(f.Name)]
-				}
-				if !ok {
-					return fmt.Errorf("key %s not found", f.Name)
-				}
-				if err := bind(v, dest.Field(i)); err != nil {
-					return wrapError(err, f.Name)
+				tags := strings.Split(f.Tag.Get(tagKey), ",")
+				reqSK := slices.Contains(tags, requireStringKeysTag)
+				if slices.Contains(tags, remainderTag) {
+					if err := bind(pyobj, dest.Field(i), reqSK); err != nil {
+						return err
+					}
+				} else {
+					v, ok := pyobj[f.Name]
+					if !ok {
+						v, ok = pyobj[snakeCase(f.Name)]
+					}
+					if !ok {
+						return fmt.Errorf("key %s not found", f.Name)
+					}
+					if err := bind(v, dest.Field(i), reqSK); err != nil {
+						return wrapError(err, f.Name)
+					}
 				}
 				continue
 			}
 		case Object:
+			t := dest.Type()
 			args := reflect.ValueOf(pyobj.Arguments.array)
 			nArgs := args.Len()
 			nFields := dest.NumField()
@@ -87,7 +99,10 @@ func bind(pyobj any, dest reflect.Value) error {
 				return fmt.Errorf("expected %d arguments, got %d", nFields, nArgs)
 			}
 			for i := range nArgs {
-				if err := bind(args.Index(i).Interface(), dest.Field(i)); err != nil {
+				reqSK := t.Field(i).Tag.Get(tagKey) == requireStringKeysTag
+				// Remainder tag not supported here since it makes no sense; the set
+				// of expected fields for an object is closed anyway.
+				if err := bind(args.Index(i).Interface(), dest.Field(i), reqSK); err != nil {
 					return wrapError(err, dest.Type().Field(i).Name)
 				}
 			}
@@ -104,22 +119,31 @@ func bind(pyobj any, dest reflect.Value) error {
 		keyBuf := reflect.New(mapType.Key()).Elem()
 		valueBuf := reflect.New(mapType.Elem()).Elem()
 		for k, v := range dict {
-			if err := bind(k, keyBuf); err != nil {
+			if err := bind(k, keyBuf, requireStringKeys); err != nil {
 				return err
 			}
-			if err := bind(v, valueBuf); err != nil {
+			if err := bind(v, valueBuf, requireStringKeys); err != nil {
 				return err
 			}
 			m.SetMapIndex(keyBuf, valueBuf)
 		}
 		dest.Set(m)
 	case reflect.Interface:
+		if requireStringKeys {
+			pyobj = restrictMapKeysToStrings(pyobj)
+		}
 		dest.Set(reflect.ValueOf(pyobj))
 	default:
 		panic("invalid target type: " + dest.Type().Name())
 	}
 	return nil
 }
+
+const (
+	tagKey               = "pickle"
+	requireStringKeysTag = "require_string_keys"
+	remainderTag         = "remainder"
+)
 
 var ucPattern = regexp.MustCompile(`\p{Lu}+`)
 
@@ -133,6 +157,28 @@ func snakeCase(name string) string {
 		s = s[1:]
 	}
 	return s
+}
+
+func restrictMapKeysToStrings(x any) any {
+	switch x := x.(type) {
+	case map[any]any:
+		m := make(map[string]any, len(x))
+		for k, v := range x {
+			s, ok := k.(string)
+			if !ok {
+				continue
+			}
+			m[s] = restrictMapKeysToStrings(v)
+		}
+		return m
+	case *[]any:
+		for i, v := range *x {
+			(*x)[i] = restrictMapKeysToStrings(v)
+		}
+		return x
+	default:
+		return x
+	}
 }
 
 func wrapError(err error, key string) error {

@@ -38,5 +38,5 @@ func Decode[T any](r io.Reader, p *T) error {
 	if err != nil {
 		return err
 	}
-	return bind(v, reflect.ValueOf(p).Elem())
+	return bind(v, reflect.ValueOf(p).Elem(), false)
 }

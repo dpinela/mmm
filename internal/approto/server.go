@@ -82,6 +82,10 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 					cmsg, err = tryParse[Connect](msg)
 				case "GetDataPackage":
 					cmsg, err = tryParse[GetDataPackage](msg)
+				case "Set":
+					cmsg, err = tryParse[SetMessage](msg)
+				case "Get":
+					cmsg, err = parseGet(msg)
 				default:
 					log.Println("unknown client message:", unknownMessage.Cmd)
 					continue
@@ -110,6 +114,26 @@ func tryParse[T ClientMessage](msg json.RawMessage) (ClientMessage, error) {
 		return nil, fmt.Errorf("error parsing %T: %v", parsedMsg, err)
 	}
 	return parsedMsg, nil
+}
+
+func parseGet(msg json.RawMessage) (ClientMessage, error) {
+	// encoding/json doesn't offer a way of putting excess keys into a map field;
+	// this is a simple workaround.
+	var (
+		names struct {
+			Keys []string
+		}
+		args map[string]any
+	)
+	if err := json.Unmarshal(msg, &args); err != nil {
+		return nil, fmt.Errorf("error parsing Get: %v", err)
+	}
+	if err := json.Unmarshal(msg, &names); err != nil {
+		return nil, fmt.Errorf("error parsing Get: %v", err)
+	}
+	delete(args, "keys")
+	delete(args, "cmd")
+	return GetMessage{Keys: names.Keys, Rest: args}, nil
 }
 
 type packet []json.RawMessage
