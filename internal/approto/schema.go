@@ -250,3 +250,5 @@ type LocationInfoMessage struct {
 	Cmd       string        `json:"cmd"`
 	Locations []NetworkItem `json:"locations"`
 }
+
+func (LocationInfoMessage) isServerMessage() {}

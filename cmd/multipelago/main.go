@@ -10,8 +10,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/dpinela/mmm/internal/approto"
@@ -38,6 +36,11 @@ type options struct {
 	mwserver string
 	mwroom   string
 	apport   int
+}
+
+type placedItem struct {
+	ownerID int
+	name    string
 }
 
 func serve(opts options) error {
@@ -307,10 +310,12 @@ waitingForResult:
 		}
 	}
 
+	placementsByLocationID := map[int]placedItem{}
+
 	nextSynthItemID := 1
 	nextSynthLocationID := 1
 	for _, p := range mwResult.Placements[singularItemGroup] {
-		pid, item, ok := parseQualifiedName(p.Item)
+		pid, item, ok := mwproto.ParseQualifiedName(p.Item)
 		if !ok {
 			log.Println("invalid MW item:", p.Item)
 			continue
@@ -325,9 +330,14 @@ waitingForResult:
 			dp.ItemNameToID[item] = nextSynthItemID
 			nextSynthItemID++
 		}
+		if locID, ok := mwproto.ParseDiscriminator(p.Location); ok {
+			placementsByLocationID[locID] = placedItem{ownerID: pid, name: item}
+		} else {
+			log.Println("location without discriminator:", p.Location)
+		}
 	}
 	for _, qualifiedLoc := range mwResult.PlayerItemsPlacements {
-		pid, loc, ok := parseQualifiedName(qualifiedLoc)
+		pid, loc, ok := mwproto.ParseQualifiedName(qualifiedLoc)
 		if !ok {
 			log.Println("invalid MW location:", qualifiedLoc)
 			continue
@@ -436,7 +446,7 @@ mainMessageLoop:
 				itemID := ownPkg.ItemNameToID[msg.Content]
 				locID := 0
 				if loc, ok := mwResult.PlayerItemsPlacements[msg.Content]; ok {
-					_, loc, ok = parseQualifiedName(loc)
+					_, loc, ok = mwproto.ParseQualifiedName(loc)
 					if ok {
 						fromPkg := dataPackages[games[msg.FromID]]
 						locID = fromPkg.LocationNameToID[loc]
@@ -467,7 +477,7 @@ mainMessageLoop:
 				}
 				for _, g := range pickedGames {
 					if g == slot.Game {
-						resp.Data.Games[g] = data.Datapackage[slot.Game]
+						resp.Data.Games[g] = data.Datapackage[slot.Game].Original
 					} else {
 						resp.Data.Games[g] = dataPackages[g]
 					}
@@ -535,28 +545,42 @@ mainMessageLoop:
 				}
 				apOutbox <- approto.MakeRetrievedMessage(values, msg.Rest)
 			case approto.LocationScoutsMessage:
-
+				scoutedItems := make([]approto.NetworkItem, 0, len(msg.Locations))
+				for _, locID := range msg.Locations {
+					p, ok := placementsByLocationID[locID]
+					if ok {
+						var itemID int
+						if p.ownerID == int(mwResult.PlayerID) {
+							itemID = data.Datapackage[slot.Game].ItemNameToID[mwproto.StripDiscriminator(p.name)]
+						} else {
+							itemID = dataPackages[games[p.ownerID]].ItemNameToID[p.name]
+						}
+						scoutedItems = append(scoutedItems, approto.NetworkItem{
+							Location: locID,
+							Player:   p.ownerID + 1,
+							Item:     itemID,
+							Flags:    0,
+						})
+					} else {
+						ownItem, ok := data.Locations[slotID][locID]
+						if !(ok && len(ownItem) >= 3) {
+							continue
+						}
+						scoutedItems = append(scoutedItems, approto.NetworkItem{
+							Location: locID,
+							Player:   int(mwResult.PlayerID) + 1,
+							Item:     ownItem[0],
+							Flags:    ownItem[2],
+						})
+					}
+				}
+				apOutbox <- approto.LocationInfoMessage{
+					Cmd:       "LocationInfo",
+					Locations: scoutedItems,
+				}
 			}
 		}
 	}
-}
-
-func parseQualifiedName(name string) (pid int, item string, ok bool) {
-	const prefix = "MW("
-
-	if !strings.HasPrefix(name, prefix) {
-		return
-	}
-	qualifier, item, ok := strings.Cut(name[len(prefix):], ")_")
-	if !ok {
-		return
-	}
-	n, err := strconv.ParseInt(qualifier, 10, 32)
-	if err != nil {
-		ok = false
-		return
-	}
-	return int(n), item, ok
 }
 
 // This is the main item group used by the HK rando as well as
