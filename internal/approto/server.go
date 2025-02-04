@@ -12,6 +12,14 @@ import (
 	"github.com/coder/websocket/wsjson"
 )
 
+type ServerMessage interface {
+	isServerMessage()
+}
+
+type ClientMessage interface {
+	isClientMessage()
+}
+
 func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan<- ServerMessage) {
 	var numConnections atomic.Int32
 	inboxCh := make(chan ClientMessage, 10)
@@ -137,11 +145,3 @@ func parseGet(msg json.RawMessage) (ClientMessage, error) {
 }
 
 type packet []json.RawMessage
-
-type ServerMessage interface {
-	isServerMessage()
-}
-
-type ClientMessage interface {
-	isClientMessage()
-}

@@ -534,10 +534,7 @@ mainMessageLoop:
 				for _, k := range msg.Keys {
 					values[k] = dataStorage[k]
 				}
-				apOutbox <- approto.RetrievedMessage{
-					Keys: values,
-					Rest: msg.Rest,
-				}
+				apOutbox <- approto.MakeRetrievedMessage(values, msg.Rest)
 			}
 		}
 	}

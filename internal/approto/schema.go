@@ -217,12 +217,19 @@ type GetMessage struct {
 
 func (GetMessage) isClientMessage() {}
 
-type RetrievedMessage struct {
-	Keys map[string]any
-	Rest map[string]any
-}
+type RetrievedMessage map[string]any
 
 func (RetrievedMessage) isServerMessage() {}
+
+func MakeRetrievedMessage(keys map[string]any, rest map[string]any) RetrievedMessage {
+	msg := make(map[string]any, len(rest)+2)
+	msg["cmd"] = "Retrieved"
+	msg["keys"] = keys
+	for k, v := range rest {
+		msg[k] = v
+	}
+	return msg
+}
 
 const (
 	ClientStatusUnknown   = 0
