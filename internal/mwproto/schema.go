@@ -258,6 +258,23 @@ func (m DataReceiveMessage) appendTo(b []byte) []byte {
 	return b
 }
 
+type DataReceiveConfirmMessage struct {
+	Label string
+	Data  string
+	From  string
+}
+
+func (DataReceiveConfirmMessage) msgType() messageType {
+	return typeDataReceiveConfirm
+}
+
+func (m DataReceiveConfirmMessage) appendTo(b []byte) []byte {
+	b = appendString(b, m.Label)
+	b = appendString(b, m.Data)
+	b = appendString(b, m.From)
+	return b
+}
+
 const LabelMultiworldItem = "MultiWorld-Item"
 
 type Placement struct {

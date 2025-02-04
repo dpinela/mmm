@@ -407,7 +407,7 @@ waitingForResult:
 	}
 	dataStorage[approto.ReadOnlyKeyPrefix+"race_mode"] = 0
 	for i := range mwResult.Nicknames {
-		key := fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", i)
+		key := fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", i+1)
 		if i == int(mwResult.PlayerID) {
 			dataStorage[key] = data.SlotData[slotID]
 		} else {
@@ -442,10 +442,11 @@ mainMessageLoop:
 					log.Println("invalid FromID:", msg.FromID)
 					continue
 				}
-				ownPkg := dataPackages[games[mwResult.PlayerID]]
-				itemID := ownPkg.ItemNameToID[msg.Content]
+				ownPkg := data.Datapackage[slot.Game]
+				itemName := mwproto.StripDiscriminator(msg.Content)
+				itemID := ownPkg.ItemNameToID[itemName]
 				locID := 0
-				if loc, ok := mwResult.PlayerItemsPlacements[msg.Content]; ok {
+				if loc, ok := mwResult.PlayerItemsPlacements[itemName]; ok {
 					_, loc, ok = mwproto.ParseQualifiedName(loc)
 					if ok {
 						fromPkg := dataPackages[games[msg.FromID]]
@@ -459,8 +460,14 @@ mainMessageLoop:
 					Flags:    0,
 				}
 				apOutbox <- approto.ReceivedItems{
+					Cmd:   "ReceivedItems",
 					Index: len(itemsSent),
 					Items: []approto.NetworkItem{ni},
+				}
+				outbox <- mwproto.DataReceiveConfirmMessage{
+					Label: msg.Label,
+					Data:  msg.Content,
+					From:  msg.From,
 				}
 				itemsSent = append(itemsSent, ni)
 			}
@@ -512,7 +519,7 @@ mainMessageLoop:
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
-					Slot:             int(mwResult.PlayerID),
+					Slot:             int(mwResult.PlayerID) + 1,
 					Players:          players,
 					SlotInfo:         slots,
 					CheckedLocations: locationsCleared,

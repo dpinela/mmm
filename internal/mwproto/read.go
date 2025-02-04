@@ -55,6 +55,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[RandoGeneratedMessage](payload)
 	case typeResult:
 		return unmarshal[ResultMessage](payload)
+	case typeDataReceive:
+		return unmarshal[DataReceiveMessage](payload)
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}
