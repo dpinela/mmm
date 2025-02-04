@@ -384,7 +384,7 @@ waitingForResult:
 	for i := range mwResult.Nicknames {
 		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"hints_0_%d", i+1)] = []any{}
 		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"client_status_0_%d", i+1)] = approto.ClientStatusUnknown
-		itemGroupsKey := approto.ReadOnlyKeyPrefix + "item_name_groups_%s" + games[i]
+		itemGroupsKey := approto.ReadOnlyKeyPrefix + "item_name_groups_" + games[i]
 		locationGroupsKey := approto.ReadOnlyKeyPrefix + "location_name_groups_" + games[i]
 		if i == int(mwResult.PlayerID) {
 			dpkg := data.Datapackage[slot.Game]
@@ -396,9 +396,13 @@ waitingForResult:
 		}
 	}
 	dataStorage[approto.ReadOnlyKeyPrefix+"race_mode"] = 0
-	dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", slotID)] = data.SlotData[slotID]
 	for i := range mwResult.Nicknames {
-		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", slotID+i+1)] = map[string]any{}
+		key := fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", i)
+		if i == int(mwResult.PlayerID) {
+			dataStorage[key] = data.SlotData[slotID]
+		} else {
+			dataStorage[key] = map[string]any{}
+		}
 	}
 
 	apInbox, apOutbox := approto.Serve(opts.apport, roomInfo)
@@ -476,13 +480,8 @@ mainMessageLoop:
 				}
 				players := make([]approto.NetworkPlayer, len(mwResult.Nicknames))
 				slots := make(map[int]approto.NetworkSlot, len(mwResult.Nicknames))
-				nextSlot := slotID + 1
 				for i, nick := range mwResult.Nicknames {
-					slot := slotID
-					if i != int(mwResult.PlayerID) {
-						slot = nextSlot
-						nextSlot++
-					}
+					slot := i + 1
 					players[i] = approto.NetworkPlayer{
 						Team:  0,
 						Slot:  slot,
@@ -503,7 +502,7 @@ mainMessageLoop:
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
-					Slot:             slotID,
+					Slot:             int(mwResult.PlayerID),
 					Players:          players,
 					SlotInfo:         slots,
 					CheckedLocations: locationsCleared,
@@ -526,7 +525,7 @@ mainMessageLoop:
 						Key:           msg.Key,
 						Value:         newV,
 						OriginalValue: oldV,
-						Slot:          slotID,
+						Slot:          int(mwResult.PlayerID),
 					}
 				}
 			case approto.GetMessage:
@@ -535,6 +534,8 @@ mainMessageLoop:
 					values[k] = dataStorage[k]
 				}
 				apOutbox <- approto.MakeRetrievedMessage(values, msg.Rest)
+			case approto.LocationScoutsMessage:
+
 			}
 		}
 	}

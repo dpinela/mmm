@@ -238,3 +238,15 @@ const (
 	ClientStatusPlaying   = 20
 	ClientStatusGoal      = 30
 )
+
+type LocationScoutsMessage struct {
+	Locations    []int
+	CreateAsHint int `json:"create_as_hint"`
+}
+
+func (LocationScoutsMessage) isClientMessage() {}
+
+type LocationInfoMessage struct {
+	Cmd       string        `json:"cmd"`
+	Locations []NetworkItem `json:"locations"`
+}
