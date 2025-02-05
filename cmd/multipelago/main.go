@@ -386,7 +386,10 @@ waitingForResult:
 	}
 
 	var (
-		locationsCleared = []int{}
+		itemHandling     approto.ItemHandlingMode
+		lastReceivedItem = ""
+		// Values in this map track whether the MW server has confirmed the item or not.
+		locationsCleared = map[int]bool{}
 		itemsSent        []approto.NetworkItem
 		dataStorage      = apDataStorage{}
 	)
@@ -442,6 +445,11 @@ mainMessageLoop:
 					log.Println("invalid FromID:", msg.FromID)
 					continue
 				}
+				if msg.Content == lastReceivedItem {
+					log.Printf("ignoring duplicate item %q from %q", msg.Content, msg.From)
+					continue
+				}
+				lastReceivedItem = msg.Content
 				ownPkg := data.Datapackage[slot.Game]
 				itemName := mwproto.StripDiscriminator(msg.Content)
 				itemID := ownPkg.ItemNameToID[itemName]
@@ -459,6 +467,8 @@ mainMessageLoop:
 					Player:   int(msg.FromID),
 					Flags:    0,
 				}
+				// TODO: remove number suffix from foreign items
+				// TODO: save mw result, generated data, and journal
 				apOutbox <- approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: len(itemsSent),
@@ -516,13 +526,23 @@ mainMessageLoop:
 				for _, locID := range data.Datapackage[slot.Game].LocationNameToID {
 					missingLocations = append(missingLocations, locID)
 				}
+				checkedLocations := make([]int, 0, len(locationsCleared))
+				for k := range locationsCleared {
+					checkedLocations = append(checkedLocations, k)
+				}
+				if msg.ItemsHandling == nil {
+					itemHandling = approto.ReceiveOthersItems
+				} else {
+					itemHandling = *msg.ItemsHandling
+				}
+				itemHandling = *msg.ItemsHandling
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
 					Slot:             int(mwResult.PlayerID) + 1,
 					Players:          players,
 					SlotInfo:         slots,
-					CheckedLocations: locationsCleared,
+					CheckedLocations: checkedLocations,
 					MissingLocations: missingLocations,
 					HintPoints:       0,
 				}
@@ -584,6 +604,65 @@ mainMessageLoop:
 				apOutbox <- approto.LocationInfoMessage{
 					Cmd:       "LocationInfo",
 					Locations: scoutedItems,
+				}
+			case approto.LocationChecksMessage:
+				for _, locID := range msg.Locations {
+					if _, checked := locationsCleared[locID]; checked {
+						continue
+					}
+
+					if p, replaced := placementsByLocationID[locID]; replaced {
+						if p.ownerID == int(mwResult.PlayerID) {
+							locationsCleared[locID] = true
+							if itemHandling&approto.ReceiveOwnItems == 0 {
+								continue
+							}
+							name := mwproto.StripDiscriminator(p.name)
+							itemID := data.Datapackage[slot.Game].ItemNameToID[name]
+							item := approto.NetworkItem{
+								Location: locID,
+								Player:   int(mwResult.PlayerID) + 1,
+								Item:     itemID,
+								Flags:    0,
+							}
+							apOutbox <- approto.ReceivedItems{
+								Cmd:   "ReceivedItems",
+								Index: len(itemsSent),
+								Items: []approto.NetworkItem{item},
+							}
+							itemsSent = append(itemsSent, item)
+						} else {
+							locationsCleared[locID] = false
+							outbox <- mwproto.DataSendMessage{
+								Label:   mwproto.LabelMultiworldItem,
+								Content: p.name,
+								To:      int32(p.ownerID),
+								TTL:     666,
+							}
+						}
+
+					} else {
+						locationsCleared[locID] = true
+						if itemHandling&approto.ReceiveOwnItems == 0 {
+							continue
+						}
+						ownItem, ok := data.Locations[slotID][locID]
+						if !(ok && len(ownItem) >= 3) {
+							continue
+						}
+						item := approto.NetworkItem{
+							Location: locID,
+							Player:   int(mwResult.PlayerID + 1),
+							Item:     ownItem[0],
+							Flags:    ownItem[2],
+						}
+						apOutbox <- approto.ReceivedItems{
+							Cmd:   "ReceivedItems",
+							Index: len(itemsSent),
+							Items: []approto.NetworkItem{item},
+						}
+						itemsSent = append(itemsSent, item)
+					}
 				}
 			}
 		}

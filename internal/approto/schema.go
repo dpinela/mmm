@@ -120,7 +120,7 @@ type Connect struct {
 	Version       Version
 	ItemsHandling *ItemHandlingMode `json:"items_handling"`
 	Tags          []string
-	SlotData      bool
+	SlotData      bool `json:"slot_data"`
 }
 
 func (Connect) isClientMessage() {}
@@ -129,8 +129,8 @@ type ItemHandlingMode int
 
 const (
 	ReceiveOthersItems ItemHandlingMode = 1 << iota
-	AcceptOwnItems
-	AcceptStartingItems
+	ReceiveOwnItems
+	ReceiveStartingItems
 )
 
 type Connected struct {
@@ -252,3 +252,9 @@ type LocationInfoMessage struct {
 }
 
 func (LocationInfoMessage) isServerMessage() {}
+
+type LocationChecksMessage struct {
+	Locations []int
+}
+
+func (LocationChecksMessage) isClientMessage() {}

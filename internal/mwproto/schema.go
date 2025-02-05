@@ -275,6 +275,25 @@ func (m DataReceiveConfirmMessage) appendTo(b []byte) []byte {
 	return b
 }
 
+type DataSendMessage struct {
+	Label   string
+	Content string
+	To      int32
+	TTL     int32
+}
+
+func (DataSendMessage) msgType() messageType {
+	return typeDataSend
+}
+
+func (m DataSendMessage) appendTo(b []byte) []byte {
+	b = appendString(b, m.Label)
+	b = appendString(b, m.Content)
+	b = byteOrder.AppendUint32(b, uint32(m.To))
+	b = byteOrder.AppendUint32(b, uint32(m.TTL))
+	return b
+}
+
 const LabelMultiworldItem = "MultiWorld-Item"
 
 type Placement struct {
