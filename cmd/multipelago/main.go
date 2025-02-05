@@ -464,11 +464,13 @@ mainMessageLoop:
 				ni := approto.NetworkItem{
 					Item:     itemID,
 					Location: locID,
-					Player:   int(msg.FromID),
+					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				// TODO: remove number suffix from foreign items
+				// TODO: remove number suffix and underscores from foreign items (where possible)
 				// TODO: save mw result, generated data, and journal
+				// TODO: handle sent data confirmations
+				// TODO: send Save messages
 				apOutbox <- approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: len(itemsSent),
@@ -502,8 +504,9 @@ mainMessageLoop:
 				apOutbox <- resp
 			case approto.Connect:
 				outbox <- mwproto.JoinMessage{
-					PlayerID: mwResult.PlayerID,
-					RandoID:  mwResult.RandoID,
+					DisplayName: slot.Name,
+					PlayerID:    mwResult.PlayerID,
+					RandoID:     mwResult.RandoID,
 				}
 				players := make([]approto.NetworkPlayer, len(mwResult.Nicknames))
 				slots := make(map[int]approto.NetworkSlot, len(mwResult.Nicknames))
