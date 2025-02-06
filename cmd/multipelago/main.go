@@ -314,6 +314,7 @@ waitingForResult:
 
 	nextSynthItemID := 1
 	nextSynthLocationID := 1
+	prettyNames := prettifyItemNames(mwResult.Placements[singularItemGroup], mwResult.PlayerID)
 	for _, p := range mwResult.Placements[singularItemGroup] {
 		pid, item, ok := mwproto.ParseQualifiedName(p.Item)
 		if !ok {
@@ -326,8 +327,9 @@ waitingForResult:
 		}
 		game := games[pid]
 		dp := dataPackages[game]
-		if _, ok := dp.ItemNameToID[item]; !ok {
-			dp.ItemNameToID[item] = nextSynthItemID
+		prettyItem := prettyNames[item]
+		if _, ok := dp.ItemNameToID[prettyItem]; !ok {
+			dp.ItemNameToID[prettyItem] = nextSynthItemID
 			nextSynthItemID++
 		}
 		if locID, ok := mwproto.ParseDiscriminator(p.Location); ok {
@@ -467,7 +469,6 @@ mainMessageLoop:
 					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				// TODO: remove number suffix and underscores from foreign items (where possible)
 				// TODO: save mw result, generated data, and journal
 				// TODO: handle sent data confirmations
 				// TODO: send Save messages
@@ -583,7 +584,8 @@ mainMessageLoop:
 						if p.ownerID == int(mwResult.PlayerID) {
 							itemID = data.Datapackage[slot.Game].ItemNameToID[mwproto.StripDiscriminator(p.name)]
 						} else {
-							itemID = dataPackages[games[p.ownerID]].ItemNameToID[p.name]
+							name := prettyNames[p.name]
+							itemID = dataPackages[games[p.ownerID]].ItemNameToID[name]
 						}
 						scoutedItems = append(scoutedItems, approto.NetworkItem{
 							Location: locID,
