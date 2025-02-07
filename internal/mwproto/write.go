@@ -4,15 +4,36 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 )
 
 func Write(w io.Writer, msg Message) error {
 	encoded := make([]byte, headerSize)
-	encoded = msg.appendTo(encoded)
+	encoded = appendMessage(encoded, msg)
 	byteOrder.PutUint32(encoded[:4], toUint32(len(encoded)))
 	byteOrder.PutUint32(encoded[4:8], uint32(msg.msgType()))
 	_, err := w.Write(encoded)
 	return err
+}
+
+func appendMessage(b []byte, m Message) []byte {
+	v := reflect.ValueOf(m)
+	for i := range v.NumField() {
+		field := v.Field(i)
+		switch field.Kind() {
+		case reflect.Uint8:
+			b = append(b, byte(field.Uint()))
+		case reflect.Int32:
+			b = byteOrder.AppendUint32(b, uint32(field.Int()))
+		case reflect.Uint32:
+			b = byteOrder.AppendUint32(b, uint32(field.Uint()))
+		case reflect.String:
+			b = appendString(b, field.String())
+		default:
+			b = appendJSON(b, field.Interface())
+		}
+	}
+	return b
 }
 
 func appendString(out []byte, s string) []byte {

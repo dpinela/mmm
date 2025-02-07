@@ -43,7 +43,6 @@ const (
 
 type Message interface {
 	msgType() messageType
-	appendTo([]byte) []byte
 }
 
 type ConnectMessage struct {
@@ -54,10 +53,6 @@ func (m ConnectMessage) msgType() messageType {
 	return typeConnect
 }
 
-func (m ConnectMessage) appendTo(b []byte) []byte {
-	return appendString(b, m.ServerName)
-}
-
 type PingMessage struct {
 	ReplyValue uint32
 }
@@ -66,17 +61,11 @@ func (m PingMessage) msgType() messageType {
 	return typePing
 }
 
-func (m PingMessage) appendTo(b []byte) []byte {
-	return byteOrder.AppendUint32(b, m.ReplyValue)
-}
-
 type DisconnectMessage struct{}
 
 func (m DisconnectMessage) msgType() messageType {
 	return typeDisconnect
 }
-
-func (m DisconnectMessage) appendTo(b []byte) []byte { return b }
 
 type JoinMessage struct {
 	DisplayName string
@@ -87,14 +76,6 @@ type JoinMessage struct {
 
 func (JoinMessage) msgType() messageType {
 	return typeJoin
-}
-
-func (m JoinMessage) appendTo(b []byte) []byte {
-	b = appendString(b, m.DisplayName)
-	b = byteOrder.AppendUint32(b, uint32(m.RandoID))
-	b = byteOrder.AppendUint32(b, uint32(m.PlayerID))
-	b = append(b, m.Mode)
-	return b
 }
 
 type ReadyMessage struct {
@@ -113,14 +94,6 @@ func (m ReadyMessage) msgType() messageType {
 	return typeReady
 }
 
-func (m ReadyMessage) appendTo(b []byte) []byte {
-	b = appendString(b, m.Room)
-	b = appendString(b, m.Nickname)
-	b = append(b, m.Mode)
-	b = appendJSON(b, m.ReadyMetadata)
-	return b
-}
-
 type ReadyConfirmMessage struct {
 	Ready int32
 	Names []string
@@ -128,12 +101,6 @@ type ReadyConfirmMessage struct {
 
 func (ReadyConfirmMessage) msgType() messageType {
 	return typeReadyConfirm
-}
-
-func (m ReadyConfirmMessage) appendTo(b []byte) []byte {
-	b = byteOrder.AppendUint32(b, toUint32(len(m.Names)))
-	b = appendJSON(b, m.Names)
-	return b
 }
 
 type ReadyDenyMessage struct {
@@ -144,18 +111,10 @@ func (ReadyDenyMessage) msgType() messageType {
 	return typeReadyDeny
 }
 
-func (m ReadyDenyMessage) appendTo(b []byte) []byte {
-	return appendString(b, m.Description)
-}
-
 type UnreadyMessage struct{}
 
 func (UnreadyMessage) msgType() messageType {
 	return typeUnready
-}
-
-func (m UnreadyMessage) appendTo(b []byte) []byte {
-	return b
 }
 
 type InitiateGameMessage struct {
@@ -168,18 +127,10 @@ func (InitiateGameMessage) msgType() messageType {
 	return typeInitiateGame
 }
 
-func (m InitiateGameMessage) appendTo(b []byte) []byte {
-	return appendJSON(b, m)
-}
-
 type RequestRandoMessage struct{}
 
 func (RequestRandoMessage) msgType() messageType {
 	return typeRequestRando
-}
-
-func (m RequestRandoMessage) appendTo(b []byte) []byte {
-	return b
 }
 
 type RandoGeneratedMessage struct {
@@ -189,12 +140,6 @@ type RandoGeneratedMessage struct {
 
 func (RandoGeneratedMessage) msgType() messageType {
 	return typeRandoGenerated
-}
-
-func (m RandoGeneratedMessage) appendTo(b []byte) []byte {
-	b = appendJSON(b, m.Items)
-	b = byteOrder.AppendUint32(b, uint32(m.Seed))
-	return b
 }
 
 type ResultMessage struct {
@@ -227,18 +172,6 @@ func (ResultMessage) msgType() messageType {
 	return typeResult
 }
 
-func (m ResultMessage) appendTo(b []byte) []byte {
-	b = byteOrder.AppendUint32(b, uint32(m.PlayerID))
-	b = byteOrder.AppendUint32(b, uint32(m.RandoID))
-	b = appendJSON(b, m.Nicknames)
-	b = appendJSON(b, m.ReadyMetadata)
-	b = appendJSON(b, m.ItemsSpoiler)
-	b = appendJSON(b, m.Placements)
-	b = appendJSON(b, m.PlayerItemsPlacements)
-	b = appendString(b, m.GeneratedHash)
-	return b
-}
-
 type DataReceiveMessage struct {
 	Label   string
 	Content string
@@ -248,14 +181,6 @@ type DataReceiveMessage struct {
 
 func (DataReceiveMessage) msgType() messageType {
 	return typeDataReceive
-}
-
-func (m DataReceiveMessage) appendTo(b []byte) []byte {
-	b = appendString(b, m.Label)
-	b = appendString(b, m.Content)
-	b = appendString(b, m.From)
-	b = byteOrder.AppendUint32(b, uint32(m.FromID))
-	return b
 }
 
 type DataReceiveConfirmMessage struct {
@@ -268,13 +193,6 @@ func (DataReceiveConfirmMessage) msgType() messageType {
 	return typeDataReceiveConfirm
 }
 
-func (m DataReceiveConfirmMessage) appendTo(b []byte) []byte {
-	b = appendString(b, m.Label)
-	b = appendString(b, m.Data)
-	b = appendString(b, m.From)
-	return b
-}
-
 type DataSendMessage struct {
 	Label   string
 	Content string
@@ -284,14 +202,6 @@ type DataSendMessage struct {
 
 func (DataSendMessage) msgType() messageType {
 	return typeDataSend
-}
-
-func (m DataSendMessage) appendTo(b []byte) []byte {
-	b = appendString(b, m.Label)
-	b = appendString(b, m.Content)
-	b = byteOrder.AppendUint32(b, uint32(m.To))
-	b = byteOrder.AppendUint32(b, uint32(m.TTL))
-	return b
 }
 
 const LabelMultiworldItem = "MultiWorld-Item"
