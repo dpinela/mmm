@@ -30,14 +30,13 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 			log.Println(err)
 			return
 		}
-		log.Println("accepted AP connection")
 		defer apconn.CloseNow()
 		n := numConnections.Load()
 		if !(n == 0 && numConnections.CompareAndSwap(n, n+1)) {
-			log.Println("too many AP clients")
+			log.Println("AP client rejected; only one allowed at a time")
 			return
 		}
-		log.Println("let AP connection through")
+		log.Println("AP client connected")
 		// signal disconnection
 		defer func() { inboxCh <- nil }()
 		ctx := r.Context()
@@ -56,12 +55,10 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 					if !ok {
 						return
 					}
-					log.Printf("sending %+v", msg)
 					if err := wsjson.Write(ctx, apconn, []ServerMessage{msg}); err != nil {
 						log.Println("error writing AP message:", err)
 					}
 				case <-ctx.Done():
-					log.Println("done writing")
 					return
 				}
 			}

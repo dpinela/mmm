@@ -3,14 +3,14 @@ package main
 import (
 	"bufio"
 	"compress/zlib"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"io"
+	"io/fs"
 	"log"
-	"net"
 	"os"
-	"time"
+	"path/filepath"
 
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
@@ -19,6 +19,7 @@ import (
 
 func main() {
 	var opts options
+	flag.StringVar(&opts.workdir, "workdir", "./multipelago-seed", "Store multiworld result and game data in `dir`")
 	flag.StringVar(&opts.apfile, "apfile", "./AP.archipelago", "The Archipelago seed to serve")
 	flag.StringVar(&opts.mwserver, "mwserver", "127.0.0.1:38281", "The multiworld server to join")
 	flag.StringVar(&opts.mwroom, "mwroom", "", "The room to join")
@@ -32,6 +33,7 @@ func main() {
 }
 
 type options struct {
+	workdir  string
 	apfile   string
 	mwserver string
 	mwroom   string
@@ -54,8 +56,21 @@ func serve(opts options) error {
 	if len(data.Version) != approto.VersionNumberSize {
 		return fmt.Errorf("invalid .archipelago version: %v", data.Version)
 	}
-	err = joinServer(opts, data)
-	return err
+	info, err := os.Stat(opts.workdir)
+	if err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("non-directory already present at workdir path %q", opts.workdir)
+		}
+		return playMW(opts, data)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if err := setupMW(opts, data); err != nil {
+		return err
+	}
+	log.Println("MW setup complete; starting AP server")
+	return playMW(opts, data)
 }
 
 func singularKey[K comparable, V any](m map[K]V) K {
@@ -141,9 +156,9 @@ func readAPFile(name string) (data apdata, err error) {
 	return
 }
 
-var errConnectionLost = errors.New("server stopped responding to pings")
+var errConnectionLost = errors.New("connection lost")
 
-func joinServer(opts options, data apdata) error {
+func setupMW(opts options, data apdata) error {
 	if len(data.SlotInfo) != 1 {
 		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
 	}
@@ -156,30 +171,14 @@ func joinServer(opts options, data apdata) error {
 		return fmt.Errorf("convert AP to MW: %w", err)
 	}
 
-	conn, err := net.Dial("tcp", opts.mwserver)
+	conn, err := mwproto.Dial(opts.mwserver)
 	if err != nil {
-		return err
+		return fmt.Errorf("connect to MW: %w", err)
 	}
 	defer conn.Close()
+	inbox := conn.Inbox()
 
-	const (
-		pingInterval       = 5 * time.Second
-		reconnectThreshold = 5
-	)
-
-	kill := make(chan struct{})
-	defer close(kill)
-	outbox := make(chan mwproto.Message)
-	defer func() {
-		outbox <- mwproto.DisconnectMessage{}
-		close(outbox)
-	}()
-	inbox := make(chan mwproto.Message)
-
-	go sendMessages(conn, outbox)
-	go readMessages(conn, inbox, kill)
-
-	outbox <- mwproto.ConnectMessage{}
+	conn.Send(mwproto.ConnectMessage{})
 
 	for {
 		msg, ok := <-inbox
@@ -193,77 +192,53 @@ func joinServer(opts options, data apdata) error {
 		log.Printf("unexpected message before connect: %#v", msg)
 	}
 
-	outbox <- mwproto.ReadyMessage{
+	conn.Send(mwproto.ReadyMessage{
 		Room:          opts.mwroom,
 		Nickname:      nickname,
 		ReadyMetadata: []mwproto.KeyValuePair{},
-	}
+	})
 
-	pingTimer := time.NewTicker(pingInterval)
-	defer pingTimer.Stop()
-	unansweredPings := 0
 waitingToEnterRoom:
 	for {
-		select {
-		case <-pingTimer.C:
-			unansweredPings++
-			if unansweredPings == reconnectThreshold {
-				return errConnectionLost
-			}
-			outbox <- mwproto.PingMessage{}
-		case msg, ok := <-inbox:
-			if !ok {
-				return errConnectionLost
-			}
-			switch msg := msg.(type) {
-			case mwproto.PingMessage:
-				unansweredPings = 0
-			case mwproto.ReadyConfirmMessage:
-				log.Printf("joined room %s with players %v", opts.mwroom, msg.Names)
-				break waitingToEnterRoom
-			case mwproto.ReadyDenyMessage:
-				log.Printf("denied entry to room %s: %s", opts.mwroom, msg.Description)
-			case mwproto.DisconnectMessage:
-				return errConnectionLost
-			case mwproto.RequestRandoMessage:
-			default:
-				log.Printf("unexpected message while joining room: %#v", msg)
-			}
+		msg, ok := <-inbox
+		if !ok {
+			return errConnectionLost
+		}
+		switch msg := msg.(type) {
+		case mwproto.ReadyConfirmMessage:
+			log.Printf("joined room %s with players %v", opts.mwroom, msg.Names)
+			break waitingToEnterRoom
+		case mwproto.ReadyDenyMessage:
+			log.Printf("denied entry to room %s: %s", opts.mwroom, msg.Description)
+		case mwproto.DisconnectMessage:
+			return errConnectionLost
+		case mwproto.RequestRandoMessage:
+		default:
+			log.Printf("unexpected message while joining room: %#v", msg)
 		}
 	}
 
 waitingForStartMW:
 	for {
-		select {
-		case <-pingTimer.C:
-			unansweredPings++
-			if unansweredPings == reconnectThreshold {
-				return errConnectionLost
-			}
-			outbox <- mwproto.PingMessage{}
-		case msg, ok := <-inbox:
-			if !ok {
-				return errConnectionLost
-			}
-			switch msg := msg.(type) {
-			case mwproto.PingMessage:
-				log.Println("ping")
-				unansweredPings = 0
-			case mwproto.DisconnectMessage:
-				return errConnectionLost
-			case mwproto.ReadyConfirmMessage:
-				log.Printf("players in room: %v", msg.Names)
-			case mwproto.RequestRandoMessage:
-				outbox <- mwproto.RandoGeneratedMessage{
-					Items: map[string][]mwproto.Placement{
-						singularItemGroup: mwPlacements,
-					},
-					Seed: 666_666_666,
-				}
-				break waitingForStartMW
-			default:
-				log.Printf("unexpected message while in room: %#v", msg)
-			}
+		msg, ok := <-inbox
+		if !ok {
+			return errConnectionLost
+		}
+		switch msg := msg.(type) {
+		case mwproto.DisconnectMessage:
+			return errConnectionLost
+		case mwproto.ReadyConfirmMessage:
+			log.Printf("players in room: %v", msg.Names)
+		case mwproto.RequestRandoMessage:
+			conn.Send(mwproto.RandoGeneratedMessage{
+				Items: map[string][]mwproto.Placement{
+					singularItemGroup: mwPlacements,
+				},
+				Seed: 666_666_666,
+			})
+			break waitingForStartMW
+		default:
+			log.Printf("unexpected message while in room: %#v", msg)
 		}
 	}
 
@@ -271,29 +246,48 @@ waitingForStartMW:
 
 waitingForResult:
 	for {
-		select {
-		case <-pingTimer.C:
-			unansweredPings++
-			if unansweredPings == reconnectThreshold {
-				return errConnectionLost
-			}
-			outbox <- mwproto.PingMessage{}
-		case msg, ok := <-inbox:
-			if !ok {
-				return errConnectionLost
-			}
-			switch msg := msg.(type) {
-			case mwproto.PingMessage:
-				log.Println("ping")
-				unansweredPings = 0
-			case mwproto.DisconnectMessage:
-				return errConnectionLost
-			case mwproto.ResultMessage:
-				mwResult = msg
-				break waitingForResult
-			}
+		msg, ok := <-inbox
+		if !ok {
+			return errConnectionLost
+		}
+		switch msg := msg.(type) {
+		case mwproto.DisconnectMessage:
+			return errConnectionLost
+		case mwproto.ResultMessage:
+			mwResult = msg
+			break waitingForResult
 		}
 	}
+
+	if err := os.Mkdir(opts.workdir, 0700); err != nil {
+		return err
+	}
+
+	mwResultFile, err := os.Create(filepath.Join(opts.workdir, mwResultFileName))
+	if err != nil {
+		return err
+	}
+	defer mwResultFile.Close()
+	enc := json.NewEncoder(mwResultFile)
+	enc.SetIndent("", "  ")
+	return enc.Encode(mwResult)
+}
+
+func playMW(opts options, data apdata) error {
+	mwResult, err := readMWResult(opts.workdir)
+	if err != nil {
+		return err
+	}
+	if len(data.SlotInfo) != 1 {
+		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
+	}
+	conn, err := mwproto.Dial(opts.mwserver)
+	if err != nil {
+		return fmt.Errorf("connect to MW: %w", err)
+	}
+	defer conn.Close()
+	slotID := singularKey(data.SlotInfo)
+	slot := data.SlotInfo[slotID]
 
 	games := make([]string, len(mwResult.Nicknames))
 	checksums := make([]string, len(mwResult.Nicknames))
@@ -425,19 +419,11 @@ waitingForResult:
 mainMessageLoop:
 	for {
 		select {
-		case <-pingTimer.C:
-			unansweredPings++
-			if unansweredPings == reconnectThreshold {
-				return errConnectionLost
-			}
-			outbox <- mwproto.PingMessage{}
-		case msg, ok := <-inbox:
+		case msg, ok := <-conn.Inbox():
 			if !ok {
 				return errConnectionLost
 			}
 			switch msg := msg.(type) {
-			case mwproto.PingMessage:
-				unansweredPings = 0
 			case mwproto.DataReceiveMessage:
 				if msg.Label != mwproto.LabelMultiworldItem {
 					log.Println("unknown label for received item:", msg.Label)
@@ -477,11 +463,11 @@ mainMessageLoop:
 					Index: len(itemsSent),
 					Items: []approto.NetworkItem{ni},
 				}
-				outbox <- mwproto.DataReceiveConfirmMessage{
+				conn.Send(mwproto.DataReceiveConfirmMessage{
 					Label: msg.Label,
 					Data:  msg.Content,
 					From:  msg.From,
-				}
+				})
 				itemsSent = append(itemsSent, ni)
 			}
 		case msg := <-apInbox:
@@ -504,11 +490,11 @@ mainMessageLoop:
 				}
 				apOutbox <- resp
 			case approto.Connect:
-				outbox <- mwproto.JoinMessage{
+				conn.Send(mwproto.JoinMessage{
 					DisplayName: slot.Name,
 					PlayerID:    mwResult.PlayerID,
 					RandoID:     mwResult.RandoID,
-				}
+				})
 				players := make([]approto.NetworkPlayer, len(mwResult.Nicknames))
 				slots := make(map[int]approto.NetworkSlot, len(mwResult.Nicknames))
 				for i, nick := range mwResult.Nicknames {
@@ -638,12 +624,12 @@ mainMessageLoop:
 							itemsSent = append(itemsSent, item)
 						} else {
 							locationsCleared[locID] = false
-							outbox <- mwproto.DataSendMessage{
+							conn.Send(mwproto.DataSendMessage{
 								Label:   mwproto.LabelMultiworldItem,
 								Content: p.name,
 								To:      int32(p.ownerID),
 								TTL:     666,
-							}
+							})
 						}
 
 					} else {
@@ -674,6 +660,18 @@ mainMessageLoop:
 	}
 }
 
+const mwResultFileName = "mwresult.json"
+
+func readMWResult(workdir string) (res mwproto.ResultMessage, err error) {
+	f, err := os.Open(filepath.Join(workdir, mwResultFileName))
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	err = json.NewDecoder(f).Decode(&res)
+	return
+}
+
 // This is the main item group used by the HK rando as well as
 // the sole item group used by Haiku and Death's Door for multiworld
 // purposes.
@@ -688,31 +686,4 @@ var apServerVersion = approto.Version{
 	Minor: 5,
 	Build: 1,
 	Class: "Version",
-}
-
-func sendMessages(conn net.Conn, messages <-chan mwproto.Message) {
-	for m := range messages {
-		if err := mwproto.Write(conn, m); err != nil {
-			log.Println("error sending message:", err)
-		}
-	}
-}
-
-func readMessages(conn net.Conn, messages chan<- mwproto.Message, done <-chan struct{}) {
-	for {
-		msg, err := mwproto.Read(conn)
-		if errors.Is(err, io.EOF) {
-			close(messages)
-			return
-		}
-		if err != nil {
-			log.Println("error reading message:", err)
-			continue
-		}
-		select {
-		case <-done:
-			return
-		case messages <- msg:
-		}
-	}
 }
