@@ -45,6 +45,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[ReadyConfirmMessage](payload)
 	case typeJoin:
 		return unmarshal[JoinMessage](payload)
+	case typeJoinConfirm:
+		return JoinConfirmMessage{}, nil
 	case typeUnready:
 		return UnreadyMessage{}, nil
 	case typeInitiateGame:
@@ -57,6 +59,10 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[ResultMessage](payload)
 	case typeDataReceive:
 		return unmarshal[DataReceiveMessage](payload)
+	case typeRequestCharmNotchCosts:
+		return RequestCharmNotchCostsMessage{}, nil
+	case typeConfirmCharmNotchCostsReceived:
+		return ConfirmCharmNotchCostsReceived{}, nil
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}

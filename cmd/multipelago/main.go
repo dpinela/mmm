@@ -80,8 +80,6 @@ func singularKey[K comparable, V any](m map[K]V) K {
 	panic("singularKey undefined on empty map")
 }
 
-
-
 type apdata struct {
 	ConnectNames  map[string][]int
 	Spheres       []map[int][]int

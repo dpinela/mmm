@@ -78,6 +78,13 @@ func (JoinMessage) msgType() messageType {
 	return typeJoin
 }
 
+type JoinConfirmMessage struct {
+}
+
+func (JoinConfirmMessage) msgType() messageType {
+	return typeJoinConfirm
+}
+
 type ReadyMessage struct {
 	Room          string
 	Nickname      string
@@ -202,6 +209,29 @@ type DataSendMessage struct {
 
 func (DataSendMessage) msgType() messageType {
 	return typeDataSend
+}
+
+type RequestCharmNotchCostsMessage struct{}
+
+func (RequestCharmNotchCostsMessage) msgType() messageType {
+	return typeRequestCharmNotchCosts
+}
+
+type AnnounceCharmNotchCostsMessage struct {
+	PlayerID   int32
+	NotchCosts map[int]int
+}
+
+func (AnnounceCharmNotchCostsMessage) msgType() messageType {
+	return typeAnnounceCharmNotchCosts
+}
+
+type ConfirmCharmNotchCostsReceived struct {
+	PlayerID int32
+}
+
+func (ConfirmCharmNotchCostsReceived) msgType() messageType {
+	return typeConfirmCharmNotchCostsReceived
 }
 
 const LabelMultiworldItem = "MultiWorld-Item"

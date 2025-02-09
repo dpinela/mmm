@@ -207,6 +207,12 @@ mainMessageLoop:
 					From:  msg.From,
 				})
 				itemsSent = append(itemsSent, ni)
+			case mwproto.RequestCharmNotchCostsMessage:
+				// We have nothing to announce.
+				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{
+					PlayerID:   mwResult.PlayerID,
+					NotchCosts: map[int]int{},
+				})
 			}
 		case msg := <-apInbox:
 			if msg == nil {
