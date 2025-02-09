@@ -108,6 +108,7 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 		}
 	})
 	go func() {
+		log.Println("Starting up AP server")
 		err := http.ListenAndServe(fmt.Sprintf("localhost:%d", port), h)
 		if err != nil {
 			log.Println("error serving AP:", err)

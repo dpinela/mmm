@@ -57,3 +57,14 @@ func apToMWPlacements(data apdata) ([]mwproto.Placement, error) {
 	}
 	return mwPlacements, nil
 }
+
+func invert[K, V comparable](m map[K]V, errmsg string) (map[V]K, error) {
+	w := make(map[V]K, len(m))
+	for k, v := range m {
+		if _, isDup := w[v]; isDup {
+			return nil, fmt.Errorf("%s: %v", errmsg, v)
+		}
+		w[v] = k
+	}
+	return w, nil
+}
