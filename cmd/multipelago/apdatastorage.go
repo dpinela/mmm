@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -9,15 +10,21 @@ import (
 	"github.com/dpinela/mmm/internal/approto"
 )
 
-type apDataStorage map[string]any
-
-func (s apDataStorage) apply(msg approto.SetMessage) (oldValue, newValue any, err error) {
+func updateDataStorage(state *persistentState, msg approto.SetMessage) (oldValue, newValue json.RawMessage, err error) {
 	if strings.HasPrefix(msg.Key, approto.ReadOnlyKeyPrefix) {
 		err = fmt.Errorf("cannot modify read-only key %q", msg.Key)
 		return
 	}
-	origVal, ok := s[msg.Key]
-	if !ok {
+	origBytes, found, err := state.getStoredData(msg.Key)
+	if err != nil {
+		return
+	}
+	var origVal any
+	err = json.Unmarshal(origBytes, &origVal)
+	if err != nil {
+		return
+	}
+	if !found {
 		origVal = msg.Default
 	}
 	var newVal any
@@ -26,11 +33,12 @@ func (s apDataStorage) apply(msg approto.SetMessage) (oldValue, newValue any, er
 		case "replace":
 			newVal = op.Value
 		case "default":
-			if ok {
+			if found {
 				newVal = origVal
 			} else {
 				newVal = msg.Default
 			}
+			found = true
 		case "add":
 			switch origVal := origVal.(type) {
 			case float64:
@@ -172,9 +180,15 @@ func (s apDataStorage) apply(msg approto.SetMessage) (oldValue, newValue any, er
 			err = fmt.Errorf("unknown data storage op: %q", op.Operation)
 			return
 		}
-		s[msg.Key] = newVal
+		origVal = newVal
 	}
-	return origVal, newVal, nil
+	var newBytes []byte
+	newBytes, err = json.Marshal(newVal)
+	if err != nil {
+		return
+	}
+	err = state.setStoredData(msg.Key, newBytes)
+	return json.RawMessage(origBytes), json.RawMessage(newBytes), nil
 }
 
 func mathOp(name string, a, b any, op func(a, b float64) float64) (float64, error) {

@@ -1,14 +1,25 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
+	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
 )
 
 func playMW(opts options, data apdata) error {
+	state, err := openPersistentState(filepath.Join(opts.workdir, "state.sqlite3"))
+	if err != nil {
+		return fmt.Errorf("open persistent state DB: %w", err)
+	}
+	defer state.close()
+
 	mwResult, err := readMWResult(opts.workdir)
 	if err != nil {
 		return err
@@ -70,7 +81,9 @@ func playMW(opts options, data apdata) error {
 			log.Println("location without discriminator:", p.Location)
 		}
 	}
-	for _, qualifiedLoc := range mwResult.PlayerItemsPlacements {
+	// Map iteration order is randomized, but we need the LocationNameToID mappings
+	// to be consistent across runs.
+	for _, qualifiedLoc := range slices.Sorted(maps.Values(mwResult.PlayerItemsPlacements)) {
 		pid, loc, ok := mwproto.ParseQualifiedName(qualifiedLoc)
 		if !ok {
 			log.Println("invalid MW location:", qualifiedLoc)
@@ -122,10 +135,7 @@ func playMW(opts options, data apdata) error {
 	var (
 		itemHandling     approto.ItemHandlingMode
 		lastReceivedItem = ""
-		// Values in this map track whether the MW server has confirmed the item or not.
-		locationsCleared = map[int]bool{}
-		itemsSent        []approto.NetworkItem
-		dataStorage      = apDataStorage{}
+		dataStorage      = map[string]any{}
 	)
 
 	for i := range mwResult.Nicknames {
@@ -196,9 +206,13 @@ mainMessageLoop:
 				// TODO: save mw result, generated data, and journal
 				// TODO: handle sent data confirmations
 				// TODO: send Save messages
+				index, err := state.addSentItem(ni)
+				if err != nil {
+					return err
+				}
 				apOutbox <- approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
-					Index: len(itemsSent),
+					Index: index,
 					Items: []approto.NetworkItem{ni},
 				}
 				conn.Send(mwproto.DataReceiveConfirmMessage{
@@ -206,7 +220,6 @@ mainMessageLoop:
 					Data:  msg.Content,
 					From:  msg.From,
 				})
-				itemsSent = append(itemsSent, ni)
 			case mwproto.RequestCharmNotchCostsMessage:
 				// We have nothing to announce.
 				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{
@@ -234,6 +247,7 @@ mainMessageLoop:
 				}
 				apOutbox <- resp
 			case approto.Connect:
+				log.Println("AP Connect received; processing")
 				conn.Send(mwproto.JoinMessage{
 					DisplayName: slot.Name,
 					PlayerID:    mwResult.PlayerID,
@@ -256,13 +270,16 @@ mainMessageLoop:
 						GroupMembers: []int{},
 					}
 				}
-				var missingLocations []int
+				missingLocationSet := map[int]struct{}{}
 				for _, locID := range data.Datapackage[slot.Game].LocationNameToID {
-					missingLocations = append(missingLocations, locID)
+					missingLocationSet[locID] = struct{}{}
 				}
-				checkedLocations := make([]int, 0, len(locationsCleared))
-				for k := range locationsCleared {
-					checkedLocations = append(checkedLocations, k)
+				checkedLocations, err := state.clearedLocations()
+				if err != nil {
+					return err
+				}
+				for _, locID := range checkedLocations {
+					delete(missingLocationSet, locID)
 				}
 				if msg.ItemsHandling == nil {
 					itemHandling = approto.ReceiveOthersItems
@@ -277,15 +294,16 @@ mainMessageLoop:
 					Players:          players,
 					SlotInfo:         slots,
 					CheckedLocations: checkedLocations,
-					MissingLocations: missingLocations,
+					MissingLocations: slices.Sorted(maps.Keys(missingLocationSet)),
 					HintPoints:       0,
 				}
 				if msg.SlotData {
 					resp.SlotData = data.SlotData[slotID]
 				}
 				apOutbox <- resp
+				log.Println("AP Connect received; response sent")
 			case approto.SetMessage:
-				oldV, newV, err := dataStorage.apply(msg)
+				oldV, newV, err := updateDataStorage(state, msg)
 				if err != nil {
 					log.Println(err)
 					continue mainMessageLoop
@@ -302,7 +320,19 @@ mainMessageLoop:
 			case approto.GetMessage:
 				values := make(map[string]any, len(msg.Keys))
 				for _, k := range msg.Keys {
-					values[k] = dataStorage[k]
+					if strings.HasPrefix(k, approto.ReadOnlyKeyPrefix) {
+						values[k] = dataStorage[k]
+						continue
+					}
+					val, found, err := state.getStoredData(k)
+					if err != nil {
+						return err
+					}
+					if found {
+						values[k] = json.RawMessage(val)
+					} else {
+						values[k] = nil
+					}
 				}
 				apOutbox <- approto.MakeRetrievedMessage(values, msg.Rest)
 			case approto.LocationScoutsMessage:
@@ -342,13 +372,16 @@ mainMessageLoop:
 				}
 			case approto.LocationChecksMessage:
 				for _, locID := range msg.Locations {
-					if _, checked := locationsCleared[locID]; checked {
+					checked, err := state.isLocationCleared(locID)
+					if err != nil {
+						return err
+					}
+					if checked {
 						continue
 					}
 
 					if p, replaced := placementsByLocationID[locID]; replaced {
 						if p.ownerID == int(mwResult.PlayerID) {
-							locationsCleared[locID] = true
 							if itemHandling&approto.ReceiveOwnItems == 0 {
 								continue
 							}
@@ -360,24 +393,28 @@ mainMessageLoop:
 								Item:     itemID,
 								Flags:    0,
 							}
+							index, err := state.addSentItem(item)
+							if err != nil {
+								return err
+							}
 							apOutbox <- approto.ReceivedItems{
 								Cmd:   "ReceivedItems",
-								Index: len(itemsSent),
+								Index: index,
 								Items: []approto.NetworkItem{item},
 							}
-							itemsSent = append(itemsSent, item)
 						} else {
-							locationsCleared[locID] = false
-							conn.Send(mwproto.DataSendMessage{
+							msg := mwproto.DataSendMessage{
 								Label:   mwproto.LabelMultiworldItem,
 								Content: p.name,
 								To:      int32(p.ownerID),
 								TTL:     666,
-							})
+							}
+							if err := state.addUnconfirmedItem(msg); err != nil {
+								return err
+							}
+							conn.Send(msg)
 						}
-
 					} else {
-						locationsCleared[locID] = true
 						if itemHandling&approto.ReceiveOwnItems == 0 {
 							continue
 						}
@@ -391,12 +428,19 @@ mainMessageLoop:
 							Item:     ownItem[0],
 							Flags:    ownItem[2],
 						}
+						index, err := state.addSentItem(item)
+						if err != nil {
+							return err
+						}
 						apOutbox <- approto.ReceivedItems{
 							Cmd:   "ReceivedItems",
-							Index: len(itemsSent),
+							Index: index,
 							Items: []approto.NetworkItem{item},
 						}
-						itemsSent = append(itemsSent, item)
+					}
+
+					if err := state.clearLocation(locID); err != nil {
+						return err
 					}
 				}
 			}
