@@ -211,6 +211,16 @@ func (DataSendMessage) msgType() messageType {
 	return typeDataSend
 }
 
+type DataSendConfirmMessage struct {
+	Label   string
+	Content string
+	To      int32
+}
+
+func (DataSendConfirmMessage) msgType() messageType {
+	return typeDataSendConfirm
+}
+
 type RequestCharmNotchCostsMessage struct{}
 
 func (RequestCharmNotchCostsMessage) msgType() messageType {

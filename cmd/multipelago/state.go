@@ -16,6 +16,7 @@ type persistentState struct {
 	isLocationClearedStmt      *sqlite.Statement
 	addSentItemStmt            *sqlite.Statement
 	addUnconfirmedItemStmt     *sqlite.Statement
+	confirmItemStmt            *sqlite.Statement
 	getStoredDataStmt          *sqlite.Statement
 	setStoredDataStmt          *sqlite.Statement
 }
@@ -117,6 +118,20 @@ func (ps *persistentState) addUnconfirmedItem(item mwproto.DataSendMessage) erro
 	return stmt.Reset()
 }
 
+func (ps *persistentState) confirmItem(item mwproto.DataSendConfirmMessage) (bool, error) {
+	stmt := ps.confirmItemStmt
+	stmt.BindString(1, item.Label)
+	stmt.BindString(2, item.Content)
+	stmt.BindInt(3, int(item.To))
+	if err := stmt.Exec(); err != nil {
+		return false, err
+	}
+	if err := stmt.Reset(); err != nil {
+		return false, err
+	}
+	return ps.db.NumChanges() > 0, nil
+}
+
 func (ps *persistentState) getStoredData(key string) (data []byte, found bool, err error) {
 	stmt := ps.getStoredDataStmt
 	defer stmt.Reset()
@@ -181,6 +196,7 @@ func openPersistentState(loc string) (*persistentState, error) {
 		isLocationClearedStmt:      db.Prepare("SELECT EXISTS(SELECT 1 FROM locations_cleared WHERE location_id = ?)"),
 		addSentItemStmt:            db.Prepare("INSERT INTO ap_sent_items (item_id, location_id, player_id, flags) VALUES (?, ?, ?, ?) RETURNING item_index"),
 		addUnconfirmedItemStmt:     db.Prepare("INSERT INTO mw_unconfirmed_sent_items (label, content, dest_player_id) VALUES (?, ?, ?)"),
+		confirmItemStmt:            db.Prepare("DELETE FROM mw_unconfirmed_sent_items WHERE label = ? AND content = ? AND dest_player_id = ?"),
 		getStoredDataStmt:          db.Prepare("SELECT json_value FROM ap_data_storage WHERE key = ?"),
 		setStoredDataStmt:          db.Prepare("INSERT INTO ap_data_storage (key, json_value) VALUES (?, ?) ON CONFLICT DO UPDATE SET json_value = excluded.json_value"),
 	}, nil

@@ -34,6 +34,10 @@ func Open(location string) (*DB, error) {
 	return db, nil
 }
 
+func (db *DB) NumChanges() int64 {
+	return int64(C.sqlite3_changes64(db.conn))
+}
+
 func (db *DB) Prepare(sql string) *Statement {
 	s := &Statement{}
 	must(C.sqlite3_prepare_v2(db.conn, cPointer(sql), C.int(len(sql)), &s.stmt, nil))

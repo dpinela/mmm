@@ -203,8 +203,6 @@ mainMessageLoop:
 					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				// TODO: save mw result, generated data, and journal
-				// TODO: handle sent data confirmations
 				// TODO: send Save messages
 				index, err := state.addSentItem(ni)
 				if err != nil {
@@ -220,12 +218,25 @@ mainMessageLoop:
 					Data:  msg.Content,
 					From:  msg.From,
 				})
+			case mwproto.DataSendConfirmMessage:
+				confirmed, err := state.confirmItem(msg)
+				if err != nil {
+					return err
+				}
+				if !confirmed {
+					log.Printf("received confirmation for item that wasn't sent: label=%q content=%q to=%d", msg.Label, msg.Content, msg.To)
+				}
 			case mwproto.RequestCharmNotchCostsMessage:
 				// We have nothing to announce.
 				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{
 					PlayerID:   mwResult.PlayerID,
 					NotchCosts: map[int]int{},
 				})
+			case mwproto.AnnounceCharmNotchCostsMessage:
+				log.Println("got charm notch costs for player", msg.PlayerID)
+				for charm := range slices.Sorted(maps.Keys(msg.NotchCosts)) {
+					log.Println("charm", charm, "costs", msg.NotchCosts[charm], "notches")
+				}
 			}
 		case msg := <-apInbox:
 			if msg == nil {
