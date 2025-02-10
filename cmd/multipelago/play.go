@@ -247,7 +247,6 @@ mainMessageLoop:
 				}
 				apOutbox <- resp
 			case approto.Connect:
-				log.Println("AP Connect received; processing")
 				conn.Send(mwproto.JoinMessage{
 					DisplayName: slot.Name,
 					PlayerID:    mwResult.PlayerID,
@@ -301,7 +300,6 @@ mainMessageLoop:
 					resp.SlotData = data.SlotData[slotID]
 				}
 				apOutbox <- resp
-				log.Println("AP Connect received; response sent")
 			case approto.SetMessage:
 				oldV, newV, err := updateDataStorage(state, msg)
 				if err != nil {

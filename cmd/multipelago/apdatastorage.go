@@ -20,13 +20,15 @@ func updateDataStorage(state *persistentState, msg approto.SetMessage) (oldValue
 		return
 	}
 	var origVal any
-	err = json.Unmarshal(origBytes, &origVal)
-	if err != nil {
-		return
-	}
-	if !found {
+	if found {
+		err = json.Unmarshal(origBytes, &origVal)
+		if err != nil {
+			return
+		}
+	} else {
 		origVal = msg.Default
 	}
+
 	var newVal any
 	for _, op := range msg.Operations {
 		switch op.Operation {
