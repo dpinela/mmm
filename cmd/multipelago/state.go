@@ -175,6 +175,7 @@ func (ps *persistentState) close() {
 	ps.addClearedLocationStmt.Close()
 	ps.addSentItemStmt.Close()
 	ps.addUnconfirmedItemStmt.Close()
+	ps.confirmItemStmt.Close()
 	ps.getStoredDataStmt.Close()
 	ps.setStoredDataStmt.Close()
 	ps.db.Close()
