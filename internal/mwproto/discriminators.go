@@ -23,7 +23,7 @@ func ParseQualifiedName(name string) (pid int, item string, ok bool) {
 	return int(n), item, ok
 }
 
-func ParseDiscriminator(name string) (discriminator int, ok bool) {
+func ParseDiscriminator(name string) (discriminator int64, ok bool) {
 	name, ok = strings.CutSuffix(name, ")")
 	if !ok {
 		return
@@ -32,11 +32,11 @@ func ParseDiscriminator(name string) (discriminator int, ok bool) {
 	if i == -1 {
 		return
 	}
-	n, err := strconv.ParseInt(name[i+2:], 10, 32)
+	n, err := strconv.ParseInt(name[i+2:], 10, 64)
 	if err != nil {
 		return
 	}
-	return int(n), true
+	return n, true
 }
 
 func StripDiscriminator(name string) string {

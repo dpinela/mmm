@@ -15,6 +15,7 @@ type persistentState struct {
 	addClearedLocationStmt     *sqlite.Statement
 	isLocationClearedStmt      *sqlite.Statement
 	addSentItemStmt            *sqlite.Statement
+	getSentItemsStmt           *sqlite.Statement
 	addUnconfirmedItemStmt     *sqlite.Statement
 	confirmItemStmt            *sqlite.Statement
 	getStoredDataStmt          *sqlite.Statement
@@ -60,30 +61,30 @@ func execOnce(stmt *sqlite.Statement, rowHandler func()) error {
 	return stmt.Reset()
 }
 
-func (ps *persistentState) clearedLocations() (ids []int, err error) {
+func (ps *persistentState) clearedLocations() (ids []int64, err error) {
 	// We must never return a nil slice from this method, as it will be sent
 	// verbatim to AP clients.
-	ids = []int{}
+	ids = []int64{}
 	stmt := ps.selectClearedLocationsStmt
 	err = exec(stmt, func() {
-		ids = append(ids, stmt.ReadInt32(0))
+		ids = append(ids, stmt.ReadInt64(0))
 	})
 	return
 }
 
-func (ps *persistentState) isLocationCleared(id int) (cleared bool, err error) {
+func (ps *persistentState) isLocationCleared(id int64) (cleared bool, err error) {
 	stmt := ps.isLocationClearedStmt
-	stmt.BindInt(1, id)
+	stmt.BindInt64(1, id)
 	err = execOnce(stmt, func() {
 		cleared = stmt.ReadInt32(0) == 1
 	})
 	return
 }
 
-func (ps *persistentState) clearLocation(id int) error {
+func (ps *persistentState) clearLocation(id int64) error {
 	stmt := ps.addClearedLocationStmt
 	defer stmt.Reset()
-	stmt.BindInt(1, id)
+	stmt.BindInt64(1, id)
 	if err := stmt.Exec(); err != nil {
 		return err
 	}
@@ -92,16 +93,33 @@ func (ps *persistentState) clearLocation(id int) error {
 
 func (ps *persistentState) addSentItem(item approto.NetworkItem) (index int, err error) {
 	stmt := ps.addSentItemStmt
-	stmt.BindInt(1, item.Item)
-	stmt.BindInt(2, item.Location)
+	stmt.BindInt64(1, item.Item)
+	stmt.BindInt64(2, item.Location)
 	stmt.BindInt(3, item.Player)
 	stmt.BindInt(4, item.Flags)
 	err = execOnce(stmt, func() {
 		// We rely on the database generating sequential IDs for rows in
 		// ap_sent_items. While this is not guaranteed in the general case,
 		// the algorithm described in https://www.sqlite.org/autoinc.html
-		// does work this way if no rows are ever deleted.
+		// does work this way if no rows are ever deleted and no conflicts
+		// occur.
 		index = stmt.ReadInt32(0) - 1
+	})
+	return
+}
+
+func (ps *persistentState) getSentItems() (items []approto.NetworkItem, err error) {
+	stmt := ps.getSentItemsStmt
+	// This will be sent verbatim to AP clients.
+	items = []approto.NetworkItem{}
+	err = exec(stmt, func() {
+		item := approto.NetworkItem{
+			Item:     stmt.ReadInt64(0),
+			Location: stmt.ReadInt64(1),
+			Player:   stmt.ReadInt32(2),
+			Flags:    stmt.ReadInt32(3),
+		}
+		items = append(items, item)
 	})
 	return
 }
@@ -174,6 +192,7 @@ func (ps *persistentState) close() {
 	ps.isLocationClearedStmt.Close()
 	ps.addClearedLocationStmt.Close()
 	ps.addSentItemStmt.Close()
+	ps.getSentItemsStmt.Close()
 	ps.addUnconfirmedItemStmt.Close()
 	ps.confirmItemStmt.Close()
 	ps.getStoredDataStmt.Close()
@@ -196,6 +215,7 @@ func openPersistentState(loc string) (*persistentState, error) {
 		addClearedLocationStmt:     db.Prepare("INSERT INTO locations_cleared (location_id) VALUES (?)"),
 		isLocationClearedStmt:      db.Prepare("SELECT EXISTS(SELECT 1 FROM locations_cleared WHERE location_id = ?)"),
 		addSentItemStmt:            db.Prepare("INSERT INTO ap_sent_items (item_id, location_id, player_id, flags) VALUES (?, ?, ?, ?) RETURNING item_index"),
+		getSentItemsStmt:           db.Prepare("SELECT item_id, location_id, player_id, flags FROM ap_sent_items ORDER BY item_index"),
 		addUnconfirmedItemStmt:     db.Prepare("INSERT INTO mw_unconfirmed_sent_items (label, content, dest_player_id) VALUES (?, ?, ?)"),
 		confirmItemStmt:            db.Prepare("DELETE FROM mw_unconfirmed_sent_items WHERE label = ? AND content = ? AND dest_player_id = ?"),
 		getStoredDataStmt:          db.Prepare("SELECT json_value FROM ap_data_storage WHERE key = ?"),

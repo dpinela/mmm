@@ -91,10 +91,14 @@ func Serve(port int, roomInfo RoomInfo) (inbox <-chan ClientMessage, outbox chan
 					cmsg, err = tryParse[SetMessage](msg)
 				case "Get":
 					cmsg, err = parseGet(msg)
+				case "SetNotify":
+					cmsg, err = tryParse[SetNotifyMessage](msg)
 				case "LocationScouts":
 					cmsg, err = tryParse[LocationScoutsMessage](msg)
 				case "LocationChecks":
 					cmsg, err = tryParse[LocationChecksMessage](msg)
+				case "Sync":
+					cmsg = SyncMessage{}
 				default:
 					log.Println("unknown client message:", unknownMessage.Cmd)
 					continue

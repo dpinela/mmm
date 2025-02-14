@@ -82,8 +82,8 @@ func singularKey[K comparable, V any](m map[K]V) K {
 
 type apdata struct {
 	ConnectNames  map[string][]int
-	Spheres       []map[int][]int
-	Locations     map[int]map[int][]int
+	Spheres       []map[int][]int64
+	Locations     map[int]map[int64][]int64
 	Datapackage   map[string]apgamedata
 	SlotInfo      map[int]apslot
 	SlotData      map[int]map[string]any `pickle:"require_string_keys"`
@@ -111,8 +111,8 @@ type apslot struct {
 }
 
 type apgamedata struct {
-	ItemNameToID     map[string]int
-	LocationNameToID map[string]int
+	ItemNameToID     map[string]int64
+	LocationNameToID map[string]int64
 	Checksum         string
 	Original         map[string]any `pickle:"require_string_keys,remainder"`
 }

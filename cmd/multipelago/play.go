@@ -48,15 +48,15 @@ func playMW(opts options, data apdata) error {
 			games[i] = fmt.Sprintf("%s's World", name)
 		}
 		dataPackages[games[i]] = &approto.DataPackage{
-			LocationNameToID: map[string]int{},
-			ItemNameToID:     map[string]int{},
+			LocationNameToID: map[string]int64{},
+			ItemNameToID:     map[string]int64{},
 		}
 	}
 
-	placementsByLocationID := map[int]placedItem{}
+	placementsByLocationID := map[int64]placedItem{}
 
-	nextSynthItemID := 1
-	nextSynthLocationID := 1
+	nextSynthItemID := int64(1)
+	nextSynthLocationID := int64(1)
 	prettyNames := prettifyItemNames(mwResult.Placements[singularItemGroup], mwResult.PlayerID)
 	for _, p := range mwResult.Placements[singularItemGroup] {
 		pid, item, ok := mwproto.ParseQualifiedName(p.Item)
@@ -136,6 +136,7 @@ func playMW(opts options, data apdata) error {
 		itemHandling     approto.ItemHandlingMode
 		lastReceivedItem = ""
 		dataStorage      = map[string]any{}
+		watchedKeys      = map[string]struct{}{}
 	)
 
 	for i := range mwResult.Nicknames {
@@ -189,7 +190,7 @@ mainMessageLoop:
 				ownPkg := data.Datapackage[slot.Game]
 				itemName := mwproto.StripDiscriminator(msg.Content)
 				itemID := ownPkg.ItemNameToID[itemName]
-				locID := 0
+				var locID int64
 				if loc, ok := mwResult.PlayerItemsPlacements[itemName]; ok {
 					_, loc, ok = mwproto.ParseQualifiedName(loc)
 					if ok {
@@ -204,6 +205,9 @@ mainMessageLoop:
 					Flags:    0,
 				}
 				// TODO: send Save messages
+				// TODO: try to resend unconfirmed sent items
+				// TODO: Sync
+				// TODO: return already-sent AP items on connect
 				index, err := state.addSentItem(ni)
 				if err != nil {
 					return err
@@ -280,7 +284,7 @@ mainMessageLoop:
 						GroupMembers: []int{},
 					}
 				}
-				missingLocationSet := map[int]struct{}{}
+				missingLocationSet := map[int64]struct{}{}
 				for _, locID := range data.Datapackage[slot.Game].LocationNameToID {
 					missingLocationSet[locID] = struct{}{}
 				}
@@ -311,13 +315,28 @@ mainMessageLoop:
 					resp.SlotData = data.SlotData[slotID]
 				}
 				apOutbox <- resp
+
+				items, err := state.getSentItems()
+				if err != nil {
+					return err
+				}
+
+				apOutbox <- approto.ReceivedItems{Index: 0, Items: items}
+			case approto.SyncMessage:
+				items, err := state.getSentItems()
+				if err != nil {
+					return err
+				}
+
+				apOutbox <- approto.ReceivedItems{Index: 0, Items: items}
 			case approto.SetMessage:
 				oldV, newV, err := updateDataStorage(state, msg)
 				if err != nil {
 					log.Println(err)
 					continue mainMessageLoop
 				}
-				if msg.WantReply {
+				_, watching := watchedKeys[msg.Key]
+				if msg.WantReply || watching {
 					apOutbox <- approto.SetReplyMessage{
 						Cmd:           "SetReply",
 						Key:           msg.Key,
@@ -325,6 +344,11 @@ mainMessageLoop:
 						OriginalValue: oldV,
 						Slot:          int(mwResult.PlayerID),
 					}
+				}
+			case approto.SetNotifyMessage:
+				for _, k := range msg.Keys {
+					log.Println("client watching key", k)
+					watchedKeys[k] = struct{}{}
 				}
 			case approto.GetMessage:
 				values := make(map[string]any, len(msg.Keys))
@@ -349,7 +373,7 @@ mainMessageLoop:
 				for _, locID := range msg.Locations {
 					p, ok := placementsByLocationID[locID]
 					if ok {
-						var itemID int
+						var itemID int64
 						if p.ownerID == int(mwResult.PlayerID) {
 							itemID = data.Datapackage[slot.Game].ItemNameToID[mwproto.StripDiscriminator(p.name)]
 						} else {
@@ -371,7 +395,7 @@ mainMessageLoop:
 							Location: locID,
 							Player:   int(mwResult.PlayerID) + 1,
 							Item:     ownItem[0],
-							Flags:    ownItem[2],
+							Flags:    int(ownItem[2]),
 						})
 					}
 				}
@@ -435,7 +459,7 @@ mainMessageLoop:
 							Location: locID,
 							Player:   int(mwResult.PlayerID + 1),
 							Item:     ownItem[0],
-							Flags:    ownItem[2],
+							Flags:    int(ownItem[2]),
 						}
 						index, err := state.addSentItem(item)
 						if err != nil {

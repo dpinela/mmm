@@ -73,9 +73,9 @@ func PermissionForMode(mode string) Permission {
 }
 
 type DataPackage struct {
-	LocationNameToID map[string]int `json:"location_name_to_id"`
-	ItemNameToID     map[string]int `json:"item_name_to_id"`
-	Checksum         string         `json:"checksum"`
+	LocationNameToID map[string]int64 `json:"location_name_to_id"`
+	ItemNameToID     map[string]int64 `json:"item_name_to_id"`
+	Checksum         string           `json:"checksum"`
 }
 
 func (dp *DataPackage) SetChecksum() {
@@ -138,8 +138,8 @@ type Connected struct {
 	Team             int                 `json:"team"`
 	Slot             int                 `json:"slot"`
 	Players          []NetworkPlayer     `json:"players"`
-	MissingLocations []int               `json:"missing_locations"`
-	CheckedLocations []int               `json:"checked_locations"`
+	MissingLocations []int64             `json:"missing_locations"`
+	CheckedLocations []int64             `json:"checked_locations"`
 	SlotData         map[string]any      `json:"slot_data"`
 	SlotInfo         map[int]NetworkSlot `json:"slot_info"`
 	HintPoints       int                 `json:"hint_points"`
@@ -178,10 +178,10 @@ type ReceivedItems struct {
 func (ReceivedItems) isServerMessage() {}
 
 type NetworkItem struct {
-	Item     int `json:"item"`
-	Location int `json:"location"`
-	Player   int `json:"player"`
-	Flags    int `json:"flags"`
+	Item     int64 `json:"item"`
+	Location int64 `json:"location"`
+	Player   int   `json:"player"`
+	Flags    int   `json:"flags"`
 }
 
 type SetMessage struct {
@@ -194,6 +194,12 @@ type SetMessage struct {
 const ReadOnlyKeyPrefix = "_read_"
 
 func (SetMessage) isClientMessage() {}
+
+type SetNotifyMessage struct {
+	Keys []string
+}
+
+func (SetNotifyMessage) isClientMessage() {}
 
 type DataStorageOperation struct {
 	Operation string
@@ -240,7 +246,7 @@ const (
 )
 
 type LocationScoutsMessage struct {
-	Locations    []int
+	Locations    []int64
 	CreateAsHint int `json:"create_as_hint"`
 }
 
@@ -254,7 +260,11 @@ type LocationInfoMessage struct {
 func (LocationInfoMessage) isServerMessage() {}
 
 type LocationChecksMessage struct {
-	Locations []int
+	Locations []int64
 }
 
 func (LocationChecksMessage) isClientMessage() {}
+
+type SyncMessage struct{}
+
+func (SyncMessage) isClientMessage() {}
