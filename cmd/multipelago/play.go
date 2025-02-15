@@ -188,10 +188,9 @@ mainMessageLoop:
 				}
 				lastReceivedItem = msg.Content
 				ownPkg := data.Datapackage[slot.Game]
-				itemName := mwproto.StripDiscriminator(msg.Content)
-				itemID := ownPkg.ItemNameToID[itemName]
+				itemID := ownPkg.ItemNameToID[mwproto.StripDiscriminator(msg.Content)]
 				var locID int64
-				if loc, ok := mwResult.PlayerItemsPlacements[itemName]; ok {
+				if loc, ok := mwResult.PlayerItemsPlacements[msg.Content]; ok {
 					_, loc, ok = mwproto.ParseQualifiedName(loc)
 					if ok {
 						fromPkg := dataPackages[games[msg.FromID]]
