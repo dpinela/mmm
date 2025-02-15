@@ -240,6 +240,9 @@ mainMessageLoop:
 				for charm := range slices.Sorted(maps.Keys(msg.NotchCosts)) {
 					log.Println("charm", charm, "costs", msg.NotchCosts[charm], "notches")
 				}
+				conn.Send(mwproto.ConfirmCharmNotchCostsReceived{
+					PlayerID: msg.PlayerID,
+				})
 			}
 		case msg := <-apInbox:
 			if msg == nil {
