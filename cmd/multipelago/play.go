@@ -211,6 +211,7 @@ mainMessageLoop:
 				if err != nil {
 					return err
 				}
+				log.Printf("received %s from player %d (%s); AP index %d", msg.Content, msg.FromID, msg.From, index)
 				apOutbox <- approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: index,
@@ -221,6 +222,7 @@ mainMessageLoop:
 					Data:  msg.Content,
 					From:  msg.From,
 				})
+				conn.Send(mwproto.SaveMessage{})
 			case mwproto.DataSendConfirmMessage:
 				confirmed, err := state.confirmItem(msg)
 				if err != nil {
@@ -323,14 +325,25 @@ mainMessageLoop:
 					return err
 				}
 
-				apOutbox <- approto.ReceivedItems{Index: 0, Items: items}
+				log.Println("sending", len(items), "items on connect")
+
+				apOutbox <- approto.ReceivedItems{
+					Cmd:   "ReceivedItems",
+					Index: 0,
+					Items: items,
+				}
 			case approto.SyncMessage:
+				log.Println("syncing")
 				items, err := state.getSentItems()
 				if err != nil {
 					return err
 				}
 
-				apOutbox <- approto.ReceivedItems{Index: 0, Items: items}
+				apOutbox <- approto.ReceivedItems{
+					Cmd:   "ReceivedItems",
+					Index: 0,
+					Items: items,
+				}
 			case approto.SetMessage:
 				oldV, newV, err := updateDataStorage(state, msg)
 				if err != nil {
@@ -414,6 +427,7 @@ mainMessageLoop:
 					if checked {
 						continue
 					}
+					log.Println("checked location", locID)
 
 					if p, replaced := placementsByLocationID[locID]; replaced {
 						if p.ownerID == int(mwResult.PlayerID) {

@@ -200,6 +200,12 @@ func (DataReceiveConfirmMessage) msgType() messageType {
 	return typeDataReceiveConfirm
 }
 
+type SaveMessage struct{}
+
+func (SaveMessage) msgType() messageType {
+	return typeSave
+}
+
 type DataSendMessage struct {
 	Label   string
 	Content string

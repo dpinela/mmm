@@ -45,9 +45,13 @@ func apToMWPlacements(data apdata) ([]mwproto.Placement, error) {
 			}
 			itemName, ok := itemNames[p[0]]
 			if !ok {
-				itemName = "Mystery_Item"
+				return nil, fmt.Errorf("item missing from datapackage: %d", p[0])
 			}
-			itemName = fmt.Sprintf("%s_(%d)", itemName, p[0])
+			// Ensure that item names as presented to the MW server are unique,
+			// as required by the protocol.
+			// The AP server implementation will strip the discriminator and
+			// look up the real item ID from the data package anyway.
+			itemName = fmt.Sprintf("%s_(%d)", itemName, len(mwPlacements))
 
 			mwPlacements = append(mwPlacements, mwproto.Placement{
 				Item:     itemName,
