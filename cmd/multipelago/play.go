@@ -172,6 +172,15 @@ mainMessageLoop:
 				return errConnectionLost
 			}
 			switch msg := msg.(type) {
+			case mwproto.JoinConfirmMessage:
+				unconfirmedItems, err := state.getUnconfirmedItems()
+				if err != nil {
+					return err
+				}
+				log.Println("resending", len(unconfirmedItems), "unconfirmed items")
+				for _, it := range unconfirmedItems {
+					conn.Send(it)
+				}
 			case mwproto.DataReceiveMessage:
 				if msg.Label != mwproto.LabelMultiworldItem {
 					log.Println("unknown label for received item:", msg.Label)
@@ -459,7 +468,7 @@ mainMessageLoop:
 								Label:   mwproto.LabelMultiworldItem,
 								Content: p.name,
 								To:      int32(p.ownerID),
-								TTL:     666,
+								TTL:     sentItemTTL,
 							}
 							if err := state.addUnconfirmedItem(msg); err != nil {
 								return err
@@ -499,3 +508,5 @@ mainMessageLoop:
 		}
 	}
 }
+
+const sentItemTTL = 666

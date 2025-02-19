@@ -16,6 +16,7 @@ type persistentState struct {
 	isLocationClearedStmt      *sqlite.Statement
 	addSentItemStmt            *sqlite.Statement
 	getSentItemsStmt           *sqlite.Statement
+	getUnconfirmedItemsStmt    *sqlite.Statement
 	addUnconfirmedItemStmt     *sqlite.Statement
 	confirmItemStmt            *sqlite.Statement
 	addReceivedItemStmt        *sqlite.Statement
@@ -126,6 +127,21 @@ func (ps *persistentState) getSentItems() (items []approto.NetworkItem, err erro
 	return
 }
 
+func (ps *persistentState) getUnconfirmedItems() (items []mwproto.DataSendMessage, err error) {
+	stmt := ps.getUnconfirmedItemsStmt
+	defer stmt.Reset()
+	err = exec(stmt, func() {
+		item := mwproto.DataSendMessage{
+			Label:   stmt.ReadString(0),
+			Content: stmt.ReadString(1),
+			To:      int32(stmt.ReadInt32(2)),
+			TTL:     sentItemTTL,
+		}
+		items = append(items, item)
+	})
+	return
+}
+
 func (ps *persistentState) addUnconfirmedItem(item mwproto.DataSendMessage) error {
 	stmt := ps.addUnconfirmedItemStmt
 	defer stmt.Reset()
@@ -216,6 +232,7 @@ func (ps *persistentState) close() {
 	ps.addClearedLocationStmt.Close()
 	ps.addSentItemStmt.Close()
 	ps.getSentItemsStmt.Close()
+	ps.getUnconfirmedItemsStmt.Close()
 	ps.addUnconfirmedItemStmt.Close()
 	ps.confirmItemStmt.Close()
 	ps.addReceivedItemStmt.Close()
@@ -241,6 +258,7 @@ func openPersistentState(loc string) (*persistentState, error) {
 		isLocationClearedStmt:      db.Prepare("SELECT EXISTS(SELECT 1 FROM locations_cleared WHERE location_id = ?)"),
 		addSentItemStmt:            db.Prepare("INSERT INTO ap_sent_items (item_id, location_id, player_id, flags) VALUES (?, ?, ?, ?) RETURNING item_index"),
 		getSentItemsStmt:           db.Prepare("SELECT item_id, location_id, player_id, flags FROM ap_sent_items ORDER BY item_index"),
+		getUnconfirmedItemsStmt:    db.Prepare("SELECT label, content, dest_player_id FROM mw_unconfirmed_sent_items"),
 		addUnconfirmedItemStmt:     db.Prepare("INSERT INTO mw_unconfirmed_sent_items (label, content, dest_player_id) VALUES (?, ?, ?)"),
 		confirmItemStmt:            db.Prepare("DELETE FROM mw_unconfirmed_sent_items WHERE label = ? AND content = ? AND dest_player_id = ?"),
 		addReceivedItemStmt:        db.Prepare("INSERT INTO mw_received_items (label, content) VALUES (?, ?)"),
