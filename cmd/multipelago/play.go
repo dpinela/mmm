@@ -133,10 +133,9 @@ func playMW(opts options, data apdata) error {
 	}
 
 	var (
-		itemHandling     approto.ItemHandlingMode
-		lastReceivedItem = ""
-		dataStorage      = map[string]any{}
-		watchedKeys      = map[string]struct{}{}
+		itemHandling approto.ItemHandlingMode
+		dataStorage  = map[string]any{}
+		watchedKeys  = map[string]struct{}{}
 	)
 
 	for i := range mwResult.Nicknames {
@@ -182,11 +181,14 @@ mainMessageLoop:
 					log.Println("invalid FromID:", msg.FromID)
 					continue
 				}
-				if msg.Content == lastReceivedItem {
+				duplicate, err := state.hasReceivedItem(msg)
+				if err != nil {
+					return err
+				}
+				if duplicate {
 					log.Printf("ignoring duplicate item %q from %q", msg.Content, msg.From)
 					continue
 				}
-				lastReceivedItem = msg.Content
 				ownPkg := data.Datapackage[slot.Game]
 				itemID := ownPkg.ItemNameToID[mwproto.StripDiscriminator(msg.Content)]
 				var locID int64
@@ -203,10 +205,8 @@ mainMessageLoop:
 					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				// TODO: send Save messages
 				// TODO: try to resend unconfirmed sent items
-				// TODO: Sync
-				// TODO: return already-sent AP items on connect
+				// TODO: handle reconnections without closing the program
 				index, err := state.addSentItem(ni)
 				if err != nil {
 					return err
@@ -222,6 +222,10 @@ mainMessageLoop:
 					Data:  msg.Content,
 					From:  msg.From,
 				})
+				err = state.addReceivedItem(msg)
+				if err != nil {
+					return err
+				}
 				conn.Send(mwproto.SaveMessage{})
 			case mwproto.DataSendConfirmMessage:
 				confirmed, err := state.confirmItem(msg)
@@ -325,7 +329,7 @@ mainMessageLoop:
 					return err
 				}
 
-				log.Println("sending", len(items), "items on connect")
+				log.Println("connected to game; sending", len(items), "items")
 
 				apOutbox <- approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
@@ -427,7 +431,6 @@ mainMessageLoop:
 					if checked {
 						continue
 					}
-					log.Println("checked location", locID)
 
 					if p, replaced := placementsByLocationID[locID]; replaced {
 						if p.ownerID == int(mwResult.PlayerID) {

@@ -18,6 +18,8 @@ type persistentState struct {
 	getSentItemsStmt           *sqlite.Statement
 	addUnconfirmedItemStmt     *sqlite.Statement
 	confirmItemStmt            *sqlite.Statement
+	addReceivedItemStmt        *sqlite.Statement
+	hasReceivedItemStmt        *sqlite.Statement
 	getStoredDataStmt          *sqlite.Statement
 	setStoredDataStmt          *sqlite.Statement
 }
@@ -150,6 +152,27 @@ func (ps *persistentState) confirmItem(item mwproto.DataSendConfirmMessage) (boo
 	return ps.db.NumChanges() > 0, nil
 }
 
+func (ps *persistentState) addReceivedItem(item mwproto.DataReceiveMessage) error {
+	stmt := ps.addReceivedItemStmt
+	defer stmt.Reset()
+	stmt.BindString(1, item.Label)
+	stmt.BindString(2, item.Content)
+	if err := stmt.Exec(); err != nil {
+		return err
+	}
+	return stmt.Reset()
+}
+
+func (ps *persistentState) hasReceivedItem(item mwproto.DataReceiveMessage) (received bool, err error) {
+	stmt := ps.hasReceivedItemStmt
+	stmt.BindString(1, item.Label)
+	stmt.BindString(2, item.Content)
+	err = execOnce(stmt, func() {
+		received = stmt.ReadInt32(0) == 1
+	})
+	return
+}
+
 func (ps *persistentState) getStoredData(key string) (data []byte, found bool, err error) {
 	stmt := ps.getStoredDataStmt
 	defer stmt.Reset()
@@ -195,6 +218,8 @@ func (ps *persistentState) close() {
 	ps.getSentItemsStmt.Close()
 	ps.addUnconfirmedItemStmt.Close()
 	ps.confirmItemStmt.Close()
+	ps.addReceivedItemStmt.Close()
+	ps.hasReceivedItemStmt.Close()
 	ps.getStoredDataStmt.Close()
 	ps.setStoredDataStmt.Close()
 	ps.db.Close()
@@ -218,6 +243,8 @@ func openPersistentState(loc string) (*persistentState, error) {
 		getSentItemsStmt:           db.Prepare("SELECT item_id, location_id, player_id, flags FROM ap_sent_items ORDER BY item_index"),
 		addUnconfirmedItemStmt:     db.Prepare("INSERT INTO mw_unconfirmed_sent_items (label, content, dest_player_id) VALUES (?, ?, ?)"),
 		confirmItemStmt:            db.Prepare("DELETE FROM mw_unconfirmed_sent_items WHERE label = ? AND content = ? AND dest_player_id = ?"),
+		addReceivedItemStmt:        db.Prepare("INSERT INTO mw_received_items (label, content) VALUES (?, ?)"),
+		hasReceivedItemStmt:        db.Prepare("SELECT EXISTS(SELECT 1 FROM mw_received_items WHERE label = ? AND content = ?)"),
 		getStoredDataStmt:          db.Prepare("SELECT json_value FROM ap_data_storage WHERE key = ?"),
 		setStoredDataStmt:          db.Prepare("INSERT INTO ap_data_storage (key, json_value) VALUES (?, ?) ON CONFLICT DO UPDATE SET json_value = excluded.json_value"),
 	}, nil
@@ -234,6 +261,13 @@ CREATE TABLE IF NOT EXISTS mw_unconfirmed_sent_items (
 	dest_player_id INTEGER NOT NULL,
 
 	PRIMARY KEY (label, content, dest_player_id)
+);
+
+CREATE TABLE IF NOT EXISTS mw_received_items (
+	label TEXT NOT NULL,
+	content TEXT NOT NULL,
+
+	PRIMARY KEY (label, content)
 );
 
 CREATE TABLE IF NOT EXISTS ap_sent_items (
