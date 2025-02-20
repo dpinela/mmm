@@ -8,12 +8,29 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
 )
 
 func playMW(opts options, data apdata) error {
+	server := approto.Serve(opts.apport)
+	defer server.Close()
+	for {
+		conn := server.Accept()
+		err := playMWWithConn(opts, data, conn)
+		if err == errConnectionLost {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error {
+	defer apconn.Close()
 	state, err := openPersistentState(filepath.Join(opts.workdir, "state.sqlite3"))
 	if err != nil {
 		return fmt.Errorf("open persistent state DB: %w", err)
@@ -110,7 +127,7 @@ func playMW(opts options, data apdata) error {
 		}
 	}
 
-	roomInfo := approto.RoomInfo{
+	apconn.Send(approto.RoomInfo{
 		Cmd:     "RoomInfo",
 		Version: apServerVersion,
 		// This would panic if data.Version is not of the
@@ -129,8 +146,8 @@ func playMW(opts options, data apdata) error {
 		Games:                games,
 		DataPackageChecksums: checksums,
 		SeedName:             data.SeedName,
-		// Time will be set by approto.Serve
-	}
+		Time:                 float64(time.Now().UnixMilli()) / float64(time.Millisecond),
+	})
 
 	var (
 		itemHandling approto.ItemHandlingMode
@@ -161,8 +178,6 @@ func playMW(opts options, data apdata) error {
 			dataStorage[key] = map[string]any{}
 		}
 	}
-
-	apInbox, apOutbox := approto.Serve(opts.apport, roomInfo)
 
 mainMessageLoop:
 	for {
@@ -214,18 +229,16 @@ mainMessageLoop:
 					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				// TODO: try to resend unconfirmed sent items
-				// TODO: handle reconnections without closing the program
 				index, err := state.addSentItem(ni)
 				if err != nil {
 					return err
 				}
 				log.Printf("received %s from player %d (%s); AP index %d", msg.Content, msg.FromID, msg.From, index)
-				apOutbox <- approto.ReceivedItems{
+				apconn.Send(approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: index,
 					Items: []approto.NetworkItem{ni},
-				}
+				})
 				conn.Send(mwproto.DataReceiveConfirmMessage{
 					Label: msg.Label,
 					Data:  msg.Content,
@@ -259,7 +272,7 @@ mainMessageLoop:
 					PlayerID: msg.PlayerID,
 				})
 			}
-		case msg := <-apInbox:
+		case msg := <-apconn.Inbox():
 			if msg == nil {
 				return errConnectionLost
 			}
@@ -277,7 +290,7 @@ mainMessageLoop:
 						resp.Data.Games[g] = dataPackages[g]
 					}
 				}
-				apOutbox <- resp
+				apconn.Send(resp)
 			case approto.Connect:
 				conn.Send(mwproto.JoinMessage{
 					DisplayName: slot.Name,
@@ -331,7 +344,7 @@ mainMessageLoop:
 				if msg.SlotData {
 					resp.SlotData = data.SlotData[slotID]
 				}
-				apOutbox <- resp
+				apconn.Send(resp)
 
 				items, err := state.getSentItems()
 				if err != nil {
@@ -340,11 +353,11 @@ mainMessageLoop:
 
 				log.Println("connected to game; sending", len(items), "items")
 
-				apOutbox <- approto.ReceivedItems{
+				apconn.Send(approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: 0,
 					Items: items,
-				}
+				})
 			case approto.SyncMessage:
 				log.Println("syncing")
 				items, err := state.getSentItems()
@@ -352,11 +365,11 @@ mainMessageLoop:
 					return err
 				}
 
-				apOutbox <- approto.ReceivedItems{
+				apconn.Send(approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: 0,
 					Items: items,
-				}
+				})
 			case approto.SetMessage:
 				oldV, newV, err := updateDataStorage(state, msg)
 				if err != nil {
@@ -365,13 +378,13 @@ mainMessageLoop:
 				}
 				_, watching := watchedKeys[msg.Key]
 				if msg.WantReply || watching {
-					apOutbox <- approto.SetReplyMessage{
+					apconn.Send(approto.SetReplyMessage{
 						Cmd:           "SetReply",
 						Key:           msg.Key,
 						Value:         newV,
 						OriginalValue: oldV,
 						Slot:          int(mwResult.PlayerID),
-					}
+					})
 				}
 			case approto.SetNotifyMessage:
 				for _, k := range msg.Keys {
@@ -395,7 +408,7 @@ mainMessageLoop:
 						values[k] = nil
 					}
 				}
-				apOutbox <- approto.MakeRetrievedMessage(values, msg.Rest)
+				apconn.Send(approto.MakeRetrievedMessage(values, msg.Rest))
 			case approto.LocationScoutsMessage:
 				scoutedItems := make([]approto.NetworkItem, 0, len(msg.Locations))
 				for _, locID := range msg.Locations {
@@ -427,10 +440,10 @@ mainMessageLoop:
 						})
 					}
 				}
-				apOutbox <- approto.LocationInfoMessage{
+				apconn.Send(approto.LocationInfoMessage{
 					Cmd:       "LocationInfo",
 					Locations: scoutedItems,
-				}
+				})
 			case approto.LocationChecksMessage:
 				for _, locID := range msg.Locations {
 					checked, err := state.isLocationCleared(locID)
@@ -458,11 +471,11 @@ mainMessageLoop:
 							if err != nil {
 								return err
 							}
-							apOutbox <- approto.ReceivedItems{
+							apconn.Send(approto.ReceivedItems{
 								Cmd:   "ReceivedItems",
 								Index: index,
 								Items: []approto.NetworkItem{item},
-							}
+							})
 						} else {
 							msg := mwproto.DataSendMessage{
 								Label:   mwproto.LabelMultiworldItem,
@@ -493,11 +506,11 @@ mainMessageLoop:
 						if err != nil {
 							return err
 						}
-						apOutbox <- approto.ReceivedItems{
+						apconn.Send(approto.ReceivedItems{
 							Cmd:   "ReceivedItems",
 							Index: index,
 							Items: []approto.NetworkItem{item},
-						}
+						})
 					}
 
 					if err := state.clearLocation(locID); err != nil {
