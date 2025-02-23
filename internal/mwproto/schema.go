@@ -190,6 +190,20 @@ func (DataReceiveMessage) msgType() messageType {
 	return typeDataReceive
 }
 
+type DatasReceiveMessage struct {
+	Items []DataItem
+	From  string
+}
+
+type DataItem struct {
+	Label   string `json:"Item1"`
+	Content string `json:"Item2"`
+}
+
+func (DatasReceiveMessage) msgType() messageType {
+	return typeDatasReceive
+}
+
 type DataReceiveConfirmMessage struct {
 	Label string
 	Data  string
@@ -198,6 +212,15 @@ type DataReceiveConfirmMessage struct {
 
 func (DataReceiveConfirmMessage) msgType() messageType {
 	return typeDataReceiveConfirm
+}
+
+type DatasReceiveConfirmMessage struct {
+	Count int32
+	From  string
+}
+
+func (DatasReceiveConfirmMessage) msgType() messageType {
+	return typeDatasReceiveConfirm
 }
 
 type SaveMessage struct{}

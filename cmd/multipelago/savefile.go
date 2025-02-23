@@ -252,21 +252,21 @@ func (ps *savefile) confirmItem(item mwproto.DataSendConfirmMessage) (bool, erro
 	return ps.db.NumChanges() > 0, nil
 }
 
-func (ps *savefile) addReceivedItem(item mwproto.DataReceiveMessage) error {
+func (ps *savefile) addReceivedItem(label, content string) error {
 	stmt := ps.addReceivedItemStmt
 	defer stmt.Reset()
-	stmt.BindString(1, item.Label)
-	stmt.BindString(2, item.Content)
+	stmt.BindString(1, label)
+	stmt.BindString(2, content)
 	if err := stmt.Exec(); err != nil {
 		return err
 	}
 	return stmt.Reset()
 }
 
-func (ps *savefile) hasReceivedItem(item mwproto.DataReceiveMessage) (received bool, err error) {
+func (ps *savefile) hasReceivedItem(label, content string) (received bool, err error) {
 	stmt := ps.hasReceivedItemStmt
-	stmt.BindString(1, item.Label)
-	stmt.BindString(2, item.Content)
+	stmt.BindString(1, label)
+	stmt.BindString(2, content)
 	err = execOnce(stmt, func() {
 		received = stmt.ReadInt32(0) == 1
 	})

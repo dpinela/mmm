@@ -201,7 +201,7 @@ mainMessageLoop:
 					log.Println("invalid FromID:", msg.FromID)
 					continue
 				}
-				duplicate, err := state.hasReceivedItem(msg)
+				duplicate, err := state.hasReceivedItem(msg.Label, msg.Content)
 				if err != nil {
 					return err
 				}
@@ -243,10 +243,76 @@ mainMessageLoop:
 					Data:  msg.Content,
 					From:  msg.From,
 				})
-				err = state.addReceivedItem(msg)
+				err = state.addReceivedItem(msg.Label, msg.Content)
 				if err != nil {
 					return err
 				}
+				conn.Send(mwproto.SaveMessage{})
+			case mwproto.DatasReceiveMessage:
+				fromID := slices.Index(nicknames, msg.From)
+				if fromID == -1 {
+					log.Println("receiving released items from unknown player", msg.From)
+				}
+				startIndex := -1
+				items := make([]approto.NetworkItem, 0, len(msg.Items))
+				for _, item := range msg.Items {
+					if item.Label != mwproto.LabelMultiworldItem {
+						log.Println("unknown label for received item:", item.Label)
+						continue
+					}
+					duplicate, err := state.hasReceivedItem(item.Label, item.Content)
+					if err != nil {
+						return err
+					}
+					if duplicate {
+						log.Printf("ignoring duplicate item %q from %q", item.Content, msg.From)
+						continue
+					}
+					ownPkg := data.Datapackage[slot.Game]
+					itemID := ownPkg.ItemNameToID[mwproto.StripDiscriminator(item.Content)]
+					sentItem := approto.NetworkItem{
+						Item:  itemID,
+						Flags: 0,
+					}
+					if fromID == -1 {
+						sentItem.Location = -2
+						sentItem.Player = 0
+					} else {
+						sentItem.Player = fromID + 1
+						loc, err := state.getLocationOfOwnItem(item.Content)
+						if err == nil {
+							_, loc, ok = mwproto.ParseQualifiedName(loc)
+							if ok {
+								fromPkg := dataPackages[games[fromID]]
+								sentItem.Location = fromPkg.LocationNameToID[loc]
+							}
+						} else if err != errZeroRows {
+							return err
+						}
+					}
+					items = append(items, sentItem)
+					index, err := state.addSentItem(sentItem)
+					if err != nil {
+						return err
+					}
+					if startIndex == -1 {
+						startIndex = index
+					}
+					err = state.addReceivedItem(item.Label, item.Content)
+					if err != nil {
+						return err
+					}
+				}
+				log.Printf("received %d released items from %s", len(items), msg.From)
+				apconn.Send(approto.ReceivedItems{
+					Cmd:   "ReceivedItems",
+					Index: startIndex,
+					Items: items,
+				})
+				conn.Send(mwproto.DatasReceiveConfirmMessage{
+					Count: int32(len(msg.Items)),
+					From:  msg.From,
+				})
 				conn.Send(mwproto.SaveMessage{})
 			case mwproto.DataSendConfirmMessage:
 				confirmed, err := state.confirmItem(msg)

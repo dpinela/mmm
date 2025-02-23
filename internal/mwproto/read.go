@@ -59,6 +59,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[ResultMessage](payload)
 	case typeDataReceive:
 		return unmarshal[DataReceiveMessage](payload)
+	case typeDatasReceive:
+		return unmarshal[DatasReceiveMessage](payload)
 	case typeDataSendConfirm:
 		return unmarshal[DataSendConfirmMessage](payload)
 	case typeAnnounceCharmNotchCosts:
