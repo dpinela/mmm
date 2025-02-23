@@ -168,14 +168,21 @@ func (ps *savefile) isLocationCleared(id int64) (cleared bool, err error) {
 	return
 }
 
-func (ps *savefile) clearLocation(id int64) error {
-	stmt := ps.addClearedLocationStmt
-	defer stmt.Reset()
-	stmt.BindInt64(1, id)
-	if err := stmt.Exec(); err != nil {
+func (ps *savefile) clearLocations(ids ...int64) error {
+	if err := ps.db.Exec("BEGIN"); err != nil {
 		return err
 	}
-	return stmt.Reset()
+	stmt := ps.addClearedLocationStmt
+	for _, id := range ids {
+		stmt.BindInt64(1, id)
+		if err := stmt.Exec(); err != nil {
+			return err
+		}
+		if err := stmt.Reset(); err != nil {
+			return err
+		}
+	}
+	return ps.db.Exec("COMMIT")
 }
 
 func (ps *savefile) addSentItem(item approto.NetworkItem) (index int, err error) {
@@ -226,16 +233,23 @@ func (ps *savefile) getUnconfirmedItems() (items []mwproto.DataSendMessage, err 
 	return
 }
 
-func (ps *savefile) addUnconfirmedItem(item mwproto.DataSendMessage) error {
-	stmt := ps.addUnconfirmedItemStmt
-	defer stmt.Reset()
-	stmt.BindString(1, item.Label)
-	stmt.BindString(2, item.Content)
-	stmt.BindInt(3, int(item.To))
-	if err := stmt.Exec(); err != nil {
+func (ps *savefile) addUnconfirmedItems(items ...mwproto.DataSendMessage) error {
+	if err := ps.db.Exec("BEGIN"); err != nil {
 		return err
 	}
-	return stmt.Reset()
+	stmt := ps.addUnconfirmedItemStmt
+	for _, item := range items {
+		stmt.BindString(1, item.Label)
+		stmt.BindString(2, item.Content)
+		stmt.BindInt(3, int(item.To))
+		if err := stmt.Exec(); err != nil {
+			return err
+		}
+		if err := stmt.Reset(); err != nil {
+			return err
+		}
+	}
+	return ps.db.Exec("COMMIT")
 }
 
 func (ps *savefile) confirmItem(item mwproto.DataSendConfirmMessage) (bool, error) {
@@ -348,11 +362,11 @@ func createSavefile(loc string, result mwproto.ResultMessage) error {
 	const savefileSchema = `
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS locations_cleared (
+CREATE TABLE locations_cleared (
 	location_id INTEGER NOT NULL PRIMARY KEY
 );
 
-CREATE TABLE IF NOT EXISTS mw_unconfirmed_sent_items (
+CREATE TABLE mw_unconfirmed_sent_items (
 	label TEXT NOT NULL,
 	content TEXT NOT NULL,
 	dest_player_id INTEGER NOT NULL,
@@ -360,14 +374,14 @@ CREATE TABLE IF NOT EXISTS mw_unconfirmed_sent_items (
 	PRIMARY KEY (label, content, dest_player_id)
 );
 
-CREATE TABLE IF NOT EXISTS mw_received_items (
+CREATE TABLE mw_received_items (
 	label TEXT NOT NULL,
 	content TEXT NOT NULL,
 
 	PRIMARY KEY (label, content)
 );
 
-CREATE TABLE IF NOT EXISTS ap_sent_items (
+CREATE TABLE ap_sent_items (
 	item_index INTEGER NOT NULL PRIMARY KEY,
 	item_id INTEGER NOT NULL,
 	location_id INTEGER NOT NULL,
@@ -375,33 +389,33 @@ CREATE TABLE IF NOT EXISTS ap_sent_items (
 	flags INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS ap_data_storage (
+CREATE TABLE ap_data_storage (
 	key TEXT NOT NULL,
 	json_value TEXT NOT NULL,
 
 	PRIMARY KEY (key)
 );
 
-CREATE TABLE IF NOT EXISTS mw_players (
+CREATE TABLE mw_players (
 	player_id INTEGER NOT NULL PRIMARY KEY,
 	nickname TEXT NOT NULL,
 	spoiler_log TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mw_global_data (
+CREATE TABLE mw_global_data (
 	player_id INTEGER NOT NULL REFERENCES mw_players (player_id),
 	rando_id INTEGER NOT NULL,
 	full_spoiler_log TEXT NOT NULL,
 	hash TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mw_own_world_placements (
+CREATE TABLE mw_own_world_placements (
 	ap_location_id INTEGER NOT NULL PRIMARY KEY,
 	dest_player_id INTEGER NOT NULL REFERENCES mw_players (player_id),
 	item_name TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS mw_own_item_placements (
+CREATE TABLE mw_own_item_placements (
 	item_name TEXT NOT NULL PRIMARY KEY,
 	location_name TEXT NOT NULL
 );

@@ -429,6 +429,47 @@ mainMessageLoop:
 					Index: 0,
 					Items: items,
 				})
+			case approto.SayMessage:
+				switch msg.Text {
+				case "!collect":
+				case "!release":
+					var messages []mwproto.DataSendMessage
+					var locations []int64
+					for p, err := range state.getOwnWorldPlacements() {
+						if err != nil {
+							return err
+						}
+						if p.ownerID == playerID {
+							continue
+						}
+						cleared, err := state.isLocationCleared(p.apLocationID)
+						if err != nil {
+							return err
+						}
+						if cleared {
+							continue
+						}
+
+						messages = append(messages, mwproto.DataSendMessage{
+							Label:   mwproto.LabelMultiworldItem,
+							Content: p.name,
+							To:      int32(p.ownerID),
+							TTL:     sentItemTTL,
+						})
+						locations = append(locations, p.apLocationID)
+					}
+					if err := state.addUnconfirmedItems(messages...); err != nil {
+						return err
+					}
+					if err := state.clearLocations(locations...); err != nil {
+						return err
+					}
+					for _, m := range messages {
+						conn.Send(m)
+					}
+				default:
+					log.Printf("client says %q", msg.Text)
+				}
 			case approto.SyncMessage:
 				if itemHandling&approto.ReceiveOwnItems == 0 {
 					continue mainMessageLoop
@@ -565,7 +606,7 @@ mainMessageLoop:
 								To:      int32(p.ownerID),
 								TTL:     sentItemTTL,
 							}
-							if err := state.addUnconfirmedItem(msg); err != nil {
+							if err := state.addUnconfirmedItems(msg); err != nil {
 								return err
 							}
 							conn.Send(msg)
@@ -597,7 +638,7 @@ mainMessageLoop:
 						}
 					}
 
-					if err := state.clearLocation(locID); err != nil {
+					if err := state.clearLocations(locID); err != nil {
 						return err
 					}
 				}

@@ -191,11 +191,11 @@ func (DataReceiveMessage) msgType() messageType {
 }
 
 type DatasReceiveMessage struct {
-	Items []DataItem
+	Items []DataReceiveItem
 	From  string
 }
 
-type DataItem struct {
+type DataReceiveItem struct {
 	Label   string `json:"Item1"`
 	Content string `json:"Item2"`
 }
