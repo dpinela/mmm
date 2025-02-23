@@ -373,6 +373,7 @@ mainMessageLoop:
 						Name:  nick,
 					}
 					slots[slot] = approto.NetworkSlot{
+						Class:        "NetworkSlot",
 						Name:         nick,
 						Game:         games[i],
 						Type:         approto.SlotTypePlayer,

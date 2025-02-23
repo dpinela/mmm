@@ -31,7 +31,7 @@ type RoomInfo struct {
 	Tags                 []string        `json:"tags"`
 	Password             bool            `json:"password"`
 	Permissions          RoomPermissions `json:"permissions"`
-	HintCost             int             `json:"hintCost"`
+	HintCost             int             `json:"hint_cost"`
 	LocationCheckPoints  int             `json:"location_check_points"`
 	Games                []string        `json:"games"`
 	DataPackageChecksums []string        `json:"data_package_checksums"`
@@ -116,7 +116,7 @@ type Connect struct {
 	Password      string
 	Game          string
 	Name          string
-	UUID          string
+	UUID          any // This is usually a string, but the text client sends a number instead, contrary to what the AP protocol documentation states.
 	Version       Version
 	ItemsHandling *ItemHandlingMode `json:"items_handling"`
 	Tags          []string
@@ -155,6 +155,7 @@ type NetworkPlayer struct {
 }
 
 type NetworkSlot struct {
+	Class        string   `json:"class"`
 	Name         string   `json:"name"`
 	Game         string   `json:"game"`
 	Type         SlotType `json:"type"`

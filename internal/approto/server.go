@@ -106,6 +106,7 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 			log.Println("error reading AP packet:", err)
 			return
 		}
+		log.Printf("%s", buf)
 		for _, msg := range buf {
 			if err := json.Unmarshal(msg, &unknownMessage); err != nil {
 				log.Println("error parsing AP command:", err)
