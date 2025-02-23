@@ -19,10 +19,10 @@ import (
 
 func main() {
 	var opts options
-	flag.StringVar(&opts.workdir, "workdir", "./multipelago-seed", "Store multiworld result and game data in `dir`")
+	flag.StringVar(&opts.savefile, "savefile", "./multipelago.sqlite3", "Store multiworld result and game data in `file`")
 	flag.StringVar(&opts.apfile, "apfile", "./AP.archipelago", "The Archipelago seed to serve")
 	flag.StringVar(&opts.mwserver, "mwserver", "127.0.0.1:38281", "The multiworld server to join")
-	flag.StringVar(&opts.mwroom, "mwroom", "", "The room to join")
+	flag.StringVar(&opts.mwroom, "mwroom", "eggu", "The room to join")
 	flag.IntVar(&opts.apport, "apport", 38281, "Serve Archipelago on port `port`")
 	flag.Parse()
 
@@ -33,7 +33,7 @@ func main() {
 }
 
 type options struct {
-	workdir  string
+	savefile string
 	apfile   string
 	mwserver string
 	mwroom   string
@@ -56,11 +56,8 @@ func serve(opts options) error {
 	if len(data.Version) != approto.VersionNumberSize {
 		return fmt.Errorf("invalid .archipelago version: %v", data.Version)
 	}
-	info, err := os.Stat(opts.workdir)
+	_, err = os.Stat(opts.savefile)
 	if err == nil {
-		if !info.IsDir() {
-			return fmt.Errorf("non-directory already present at workdir path %q", opts.workdir)
-		}
 		return playMW(opts, data)
 	}
 	if !errors.Is(err, fs.ErrNotExist) {

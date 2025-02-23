@@ -1,11 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 
 	"github.com/dpinela/mmm/internal/mwproto"
 )
@@ -111,16 +108,5 @@ waitingForResult:
 		}
 	}
 
-	if err := os.Mkdir(opts.workdir, 0700); err != nil {
-		return err
-	}
-
-	mwResultFile, err := os.Create(filepath.Join(opts.workdir, mwResultFileName))
-	if err != nil {
-		return err
-	}
-	defer mwResultFile.Close()
-	enc := json.NewEncoder(mwResultFile)
-	enc.SetIndent("", "  ")
-	return enc.Encode(mwResult)
+	return createSavefile(opts.savefile, mwResult)
 }

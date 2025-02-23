@@ -10,7 +10,7 @@ import (
 	"github.com/dpinela/mmm/internal/approto"
 )
 
-func updateDataStorage(state *persistentState, msg approto.SetMessage) (oldValue, newValue json.RawMessage, err error) {
+func updateDataStorage(state *savefile, msg approto.SetMessage) (oldValue, newValue json.RawMessage, err error) {
 	if strings.HasPrefix(msg.Key, approto.ReadOnlyKeyPrefix) {
 		err = fmt.Errorf("cannot modify read-only key %q", msg.Key)
 		return

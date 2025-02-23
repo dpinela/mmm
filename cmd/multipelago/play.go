@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -31,16 +30,12 @@ func playMW(opts options, data apdata) error {
 
 func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error {
 	defer apconn.Close()
-	state, err := openPersistentState(filepath.Join(opts.workdir, "state.sqlite3"))
+	state, err := openSavefile(opts.savefile)
 	if err != nil {
 		return fmt.Errorf("open persistent state DB: %w", err)
 	}
 	defer state.close()
 
-	mwResult, err := readMWResult(opts.workdir)
-	if err != nil {
-		return err
-	}
 	if len(data.SlotInfo) != 1 {
 		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
 	}
@@ -55,11 +50,20 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 	slotID := singularKey(data.SlotInfo)
 	slot := data.SlotInfo[slotID]
 
-	games := make([]string, len(mwResult.Nicknames))
-	checksums := make([]string, len(mwResult.Nicknames))
+	nicknames, err := state.getNicknames()
+	if err != nil {
+		return err
+	}
+	playerID, randoID, err := state.getConnectionParams()
+	if err != nil {
+		return err
+	}
+
+	games := make([]string, len(nicknames))
+	checksums := make([]string, len(nicknames))
 	dataPackages := map[string]*approto.DataPackage{}
-	for i, name := range mwResult.Nicknames {
-		if i == int(mwResult.PlayerID) {
+	for i, name := range nicknames {
+		if i == playerID {
 			games[i] = slot.Game
 		} else {
 			games[i] = fmt.Sprintf("%s's World", name)
@@ -70,37 +74,29 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		}
 	}
 
-	placementsByLocationID := map[int64]placedItem{}
-
 	nextSynthItemID := int64(1)
 	nextSynthLocationID := int64(1)
-	prettyNames := prettifyItemNames(mwResult.Placements[singularItemGroup], mwResult.PlayerID)
-	for _, p := range mwResult.Placements[singularItemGroup] {
-		pid, item, ok := mwproto.ParseQualifiedName(p.Item)
-		if !ok {
-			log.Println("invalid MW item:", p.Item)
+	for p, err := range state.getOwnWorldPlacements() {
+		if err != nil {
+			return err
+		}
+		if !(p.ownerID >= 0 && p.ownerID < len(games)) {
+			log.Println("MW item has world out of range:", p.placedItem.name)
 			continue
 		}
-		if !(pid >= 0 && pid < len(games)) {
-			log.Println("MW item has world out of range:", p.Item)
-			continue
-		}
-		game := games[pid]
+		game := games[p.ownerID]
 		dp := dataPackages[game]
-		prettyItem := prettyNames[item]
+		prettyItem := strings.ReplaceAll(mwproto.StripDiscriminator(p.placedItem.name), "_", " ")
 		if _, ok := dp.ItemNameToID[prettyItem]; !ok {
 			dp.ItemNameToID[prettyItem] = nextSynthItemID
 			nextSynthItemID++
 		}
-		if locID, ok := mwproto.ParseDiscriminator(p.Location); ok {
-			placementsByLocationID[locID] = placedItem{ownerID: pid, name: item}
-		} else {
-			log.Println("location without discriminator:", p.Location)
-		}
 	}
-	// Map iteration order is randomized, but we need the LocationNameToID mappings
-	// to be consistent across runs.
-	for _, qualifiedLoc := range slices.Sorted(maps.Values(mwResult.PlayerItemsPlacements)) {
+
+	for qualifiedLoc, err := range state.getOwnItemLocations() {
+		if err != nil {
+			return err
+		}
 		pid, loc, ok := mwproto.ParseQualifiedName(qualifiedLoc)
 		if !ok {
 			log.Println("invalid MW location:", qualifiedLoc)
@@ -118,7 +114,7 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		}
 	}
 	for i, g := range games {
-		if i == int(mwResult.PlayerID) {
+		if i == playerID {
 			checksums[i] = data.Datapackage[slot.Game].Checksum
 		} else {
 			dp := dataPackages[g]
@@ -155,12 +151,12 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		watchedKeys  = map[string]struct{}{}
 	)
 
-	for i := range mwResult.Nicknames {
+	for i := range nicknames {
 		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"hints_0_%d", i+1)] = []any{}
 		dataStorage[fmt.Sprintf(approto.ReadOnlyKeyPrefix+"client_status_0_%d", i+1)] = approto.ClientStatusUnknown
 		itemGroupsKey := approto.ReadOnlyKeyPrefix + "item_name_groups_" + games[i]
 		locationGroupsKey := approto.ReadOnlyKeyPrefix + "location_name_groups_" + games[i]
-		if i == int(mwResult.PlayerID) {
+		if i == playerID {
 			dpkg := data.Datapackage[slot.Game]
 			dataStorage[itemGroupsKey] = dpkg.Original["item_name_groups"]
 			dataStorage[locationGroupsKey] = dpkg.Original["location_name_groups"]
@@ -170,9 +166,9 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		}
 	}
 	dataStorage[approto.ReadOnlyKeyPrefix+"race_mode"] = 0
-	for i := range mwResult.Nicknames {
+	for i := range nicknames {
 		key := fmt.Sprintf(approto.ReadOnlyKeyPrefix+"slot_data_%d", i+1)
-		if i == int(mwResult.PlayerID) {
+		if i == playerID {
 			dataStorage[key] = data.SlotData[slotID]
 		} else {
 			dataStorage[key] = map[string]any{}
@@ -216,12 +212,15 @@ mainMessageLoop:
 				ownPkg := data.Datapackage[slot.Game]
 				itemID := ownPkg.ItemNameToID[mwproto.StripDiscriminator(msg.Content)]
 				var locID int64
-				if loc, ok := mwResult.PlayerItemsPlacements[msg.Content]; ok {
+				loc, err := state.getLocationOfOwnItem(msg.Content)
+				if err == nil {
 					_, loc, ok = mwproto.ParseQualifiedName(loc)
 					if ok {
 						fromPkg := dataPackages[games[msg.FromID]]
 						locID = fromPkg.LocationNameToID[loc]
 					}
+				} else if err != errZeroRows {
+					return err
 				}
 				ni := approto.NetworkItem{
 					Item:     itemID,
@@ -260,7 +259,7 @@ mainMessageLoop:
 			case mwproto.RequestCharmNotchCostsMessage:
 				// We have nothing to announce.
 				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{
-					PlayerID:   mwResult.PlayerID,
+					PlayerID:   int32(playerID),
 					NotchCosts: map[int]int{},
 				})
 			case mwproto.AnnounceCharmNotchCostsMessage:
@@ -294,12 +293,12 @@ mainMessageLoop:
 			case approto.Connect:
 				conn.Send(mwproto.JoinMessage{
 					DisplayName: slot.Name,
-					PlayerID:    mwResult.PlayerID,
-					RandoID:     mwResult.RandoID,
+					PlayerID:    int32(playerID),
+					RandoID:     int32(randoID),
 				})
-				players := make([]approto.NetworkPlayer, len(mwResult.Nicknames))
-				slots := make(map[int]approto.NetworkSlot, len(mwResult.Nicknames))
-				for i, nick := range mwResult.Nicknames {
+				players := make([]approto.NetworkPlayer, len(nicknames))
+				slots := make(map[int]approto.NetworkSlot, len(nicknames))
+				for i, nick := range nicknames {
 					slot := i + 1
 					players[i] = approto.NetworkPlayer{
 						Team:  0,
@@ -334,7 +333,7 @@ mainMessageLoop:
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
-					Slot:             int(mwResult.PlayerID) + 1,
+					Slot:             playerID + 1,
 					Players:          players,
 					SlotInfo:         slots,
 					CheckedLocations: checkedLocations,
@@ -383,7 +382,7 @@ mainMessageLoop:
 						Key:           msg.Key,
 						Value:         newV,
 						OriginalValue: oldV,
-						Slot:          int(mwResult.PlayerID),
+						Slot:          playerID,
 					})
 				}
 			case approto.SetNotifyMessage:
@@ -412,13 +411,16 @@ mainMessageLoop:
 			case approto.LocationScoutsMessage:
 				scoutedItems := make([]approto.NetworkItem, 0, len(msg.Locations))
 				for _, locID := range msg.Locations {
-					p, ok := placementsByLocationID[locID]
-					if ok {
+					p, err := state.getPlacedItem(locID)
+					if err != nil && err != errZeroRows {
+						return err
+					}
+					if err == nil {
 						var itemID int64
-						if p.ownerID == int(mwResult.PlayerID) {
+						if p.ownerID == playerID {
 							itemID = data.Datapackage[slot.Game].ItemNameToID[mwproto.StripDiscriminator(p.name)]
 						} else {
-							name := prettyNames[p.name]
+							name := prettifyName(p.name)
 							itemID = dataPackages[games[p.ownerID]].ItemNameToID[name]
 						}
 						scoutedItems = append(scoutedItems, approto.NetworkItem{
@@ -434,7 +436,7 @@ mainMessageLoop:
 						}
 						scoutedItems = append(scoutedItems, approto.NetworkItem{
 							Location: locID,
-							Player:   int(mwResult.PlayerID) + 1,
+							Player:   playerID + 1,
 							Item:     ownItem[0],
 							Flags:    int(ownItem[2]),
 						})
@@ -454,8 +456,13 @@ mainMessageLoop:
 						continue
 					}
 
-					if p, replaced := placementsByLocationID[locID]; replaced {
-						if p.ownerID == int(mwResult.PlayerID) {
+					p, err := state.getPlacedItem(locID)
+					if err != nil && err != errZeroRows {
+						return err
+					}
+
+					if err == nil {
+						if p.ownerID == playerID {
 							if itemHandling&approto.ReceiveOwnItems == 0 {
 								continue
 							}
@@ -463,7 +470,7 @@ mainMessageLoop:
 							itemID := data.Datapackage[slot.Game].ItemNameToID[name]
 							item := approto.NetworkItem{
 								Location: locID,
-								Player:   int(mwResult.PlayerID) + 1,
+								Player:   playerID + 1,
 								Item:     itemID,
 								Flags:    0,
 							}
@@ -498,7 +505,7 @@ mainMessageLoop:
 						}
 						item := approto.NetworkItem{
 							Location: locID,
-							Player:   int(mwResult.PlayerID + 1),
+							Player:   playerID + 1,
 							Item:     ownItem[0],
 							Flags:    int(ownItem[2]),
 						}
@@ -520,6 +527,10 @@ mainMessageLoop:
 			}
 		}
 	}
+}
+
+func prettifyName(name string) string {
+	return strings.ReplaceAll(mwproto.StripDiscriminator(name), "_", " ")
 }
 
 const sentItemTTL = 666

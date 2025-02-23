@@ -20,7 +20,8 @@ func init() {
 }
 
 type DB struct {
-	conn *C.sqlite3
+	conn       *C.sqlite3
+	statements []Statement
 }
 
 func Open(location string) (*DB, error) {
@@ -39,7 +40,9 @@ func (db *DB) NumChanges() int64 {
 }
 
 func (db *DB) Prepare(sql string) *Statement {
-	s := &Statement{}
+	n := len(db.statements)
+	db.statements = append(db.statements, Statement{})
+	s := &db.statements[n]
 	must(C.sqlite3_prepare_v2(db.conn, cPointer(sql), C.int(len(sql)), &s.stmt, nil))
 	return s
 }
@@ -57,6 +60,9 @@ func (db *DB) Exec(sql string) error {
 }
 
 func (db *DB) Close() {
+	for i := range db.statements {
+		db.statements[i].Close()
+	}
 	must(C.sqlite3_close(db.conn))
 	db.conn = nil
 }
@@ -137,6 +143,9 @@ func (s *Statement) Reset() error {
 }
 
 func (s *Statement) Close() {
+	if s.stmt == nil {
+		return
+	}
 	must(C.sqlite3_finalize(s.stmt))
 	s.stmt = nil
 }
