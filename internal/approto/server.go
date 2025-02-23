@@ -106,7 +106,6 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 			log.Println("error reading AP packet:", err)
 			return
 		}
-		log.Printf("%s", buf)
 		for _, msg := range buf {
 			if err := json.Unmarshal(msg, &unknownMessage); err != nil {
 				log.Println("error parsing AP command:", err)
@@ -133,6 +132,8 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 				cmsg, err = tryParse[LocationChecksMessage](msg)
 			case "Sync":
 				cmsg = SyncMessage{}
+			case "Say":
+				cmsg, err = tryParse[SayMessage](msg)
 			default:
 				log.Println("unknown client message:", unknownMessage.Cmd)
 				continue

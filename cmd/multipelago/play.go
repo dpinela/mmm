@@ -233,11 +233,13 @@ mainMessageLoop:
 					return err
 				}
 				log.Printf("received %s from player %d (%s); AP index %d", msg.Content, msg.FromID, msg.From, index)
-				apconn.Send(approto.ReceivedItems{
-					Cmd:   "ReceivedItems",
-					Index: index,
-					Items: []approto.NetworkItem{ni},
-				})
+				if itemHandling&approto.ReceiveOthersItems != 0 {
+					apconn.Send(approto.ReceivedItems{
+						Cmd:   "ReceivedItems",
+						Index: index,
+						Items: []approto.NetworkItem{ni},
+					})
+				}
 				conn.Send(mwproto.DataReceiveConfirmMessage{
 					Label: msg.Label,
 					Data:  msg.Content,
@@ -304,11 +306,13 @@ mainMessageLoop:
 					}
 				}
 				log.Printf("received %d released items from %s", len(items), msg.From)
-				apconn.Send(approto.ReceivedItems{
-					Cmd:   "ReceivedItems",
-					Index: startIndex,
-					Items: items,
-				})
+				if itemHandling&approto.ReceiveOthersItems != 0 {
+					apconn.Send(approto.ReceivedItems{
+						Cmd:   "ReceivedItems",
+						Index: startIndex,
+						Items: items,
+					})
+				}
 				conn.Send(mwproto.DatasReceiveConfirmMessage{
 					Count: int32(len(msg.Items)),
 					From:  msg.From,
@@ -419,18 +423,23 @@ mainMessageLoop:
 
 				log.Println("connected to game; sending", len(items), "items")
 
+				// ignore item handling flags for now (can't send only *some* items)
 				apconn.Send(approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: 0,
 					Items: items,
 				})
 			case approto.SyncMessage:
+				if itemHandling&approto.ReceiveOwnItems == 0 {
+					continue mainMessageLoop
+				}
 				log.Println("syncing")
 				items, err := state.getSentItems()
 				if err != nil {
 					return err
 				}
 
+				// ignore item handling flags for now (can't send only *some* items)
 				apconn.Send(approto.ReceivedItems{
 					Cmd:   "ReceivedItems",
 					Index: 0,
@@ -530,9 +539,6 @@ mainMessageLoop:
 
 					if err == nil {
 						if p.ownerID == playerID {
-							if itemHandling&approto.ReceiveOwnItems == 0 {
-								continue
-							}
 							name := mwproto.StripDiscriminator(p.name)
 							itemID := data.Datapackage[slot.Game].ItemNameToID[name]
 							item := approto.NetworkItem{
@@ -545,11 +551,13 @@ mainMessageLoop:
 							if err != nil {
 								return err
 							}
-							apconn.Send(approto.ReceivedItems{
-								Cmd:   "ReceivedItems",
-								Index: index,
-								Items: []approto.NetworkItem{item},
-							})
+							if itemHandling&approto.ReceiveOwnItems != 0 {
+								apconn.Send(approto.ReceivedItems{
+									Cmd:   "ReceivedItems",
+									Index: index,
+									Items: []approto.NetworkItem{item},
+								})
+							}
 						} else {
 							msg := mwproto.DataSendMessage{
 								Label:   mwproto.LabelMultiworldItem,
@@ -580,11 +588,13 @@ mainMessageLoop:
 						if err != nil {
 							return err
 						}
-						apconn.Send(approto.ReceivedItems{
-							Cmd:   "ReceivedItems",
-							Index: index,
-							Items: []approto.NetworkItem{item},
-						})
+						if itemHandling&approto.ReceiveOwnItems != 0 {
+							apconn.Send(approto.ReceivedItems{
+								Cmd:   "ReceivedItems",
+								Index: index,
+								Items: []approto.NetworkItem{item},
+							})
+						}
 					}
 
 					if err := state.clearLocation(locID); err != nil {

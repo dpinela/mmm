@@ -269,3 +269,9 @@ func (LocationChecksMessage) isClientMessage() {}
 type SyncMessage struct{}
 
 func (SyncMessage) isClientMessage() {}
+
+type SayMessage struct {
+	Text string
+}
+
+func (SayMessage) isClientMessage() {}
