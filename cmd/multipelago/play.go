@@ -93,23 +93,19 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		}
 	}
 
-	for qualifiedLoc, err := range state.getOwnItemLocations() {
+	for loc, err := range state.getOwnItemLocations() {
 		if err != nil {
 			return err
 		}
-		pid, loc, ok := mwproto.ParseQualifiedName(qualifiedLoc)
-		if !ok {
-			log.Println("invalid MW location:", qualifiedLoc)
-			continue
-		}
+		pid := loc.playerID
 		if !(pid >= 0 && pid < len(games)) {
-			log.Println("MW location has world out of range:", qualifiedLoc)
+			log.Println("MW location has world out of range:", pid)
 			continue
 		}
 		game := games[pid]
 		dp := dataPackages[game]
-		if _, ok := dp.LocationNameToID[loc]; !ok {
-			dp.LocationNameToID[loc] = nextSynthLocationID
+		if _, ok := dp.LocationNameToID[loc.name]; !ok {
+			dp.LocationNameToID[loc.name] = nextSynthLocationID
 			nextSynthLocationID++
 		}
 	}
@@ -228,7 +224,7 @@ mainMessageLoop:
 					Player:   int(msg.FromID) + 1,
 					Flags:    0,
 				}
-				index, err := state.addSentItem(ni)
+				index, err := state.addSentItems(ni)
 				if err != nil {
 					return err
 				}
@@ -255,7 +251,6 @@ mainMessageLoop:
 				if fromID == -1 {
 					log.Println("receiving released items from unknown player", msg.From)
 				}
-				startIndex := -1
 				items := make([]approto.NetworkItem, 0, len(msg.Items))
 				for _, item := range msg.Items {
 					if item.Label != mwproto.LabelMultiworldItem {
@@ -293,17 +288,14 @@ mainMessageLoop:
 						}
 					}
 					items = append(items, sentItem)
-					index, err := state.addSentItem(sentItem)
-					if err != nil {
-						return err
-					}
-					if startIndex == -1 {
-						startIndex = index
-					}
 					err = state.addReceivedItem(item.Label, item.Content)
 					if err != nil {
 						return err
 					}
+				}
+				startIndex, err := state.addSentItems(items...)
+				if err != nil {
+					return err
 				}
 				log.Printf("received %d released items from %s", len(items), msg.From)
 				if itemHandling&approto.ReceiveOthersItems != 0 {
@@ -432,6 +424,30 @@ mainMessageLoop:
 			case approto.SayMessage:
 				switch msg.Text {
 				case "!collect":
+					ps, err := state.getCollectablePlacements(playerID)
+					if err != nil {
+						return err
+					}
+					items := make([]approto.NetworkItem, len(ps))
+					for i, p := range ps {
+						fromPkg := dataPackages[games[p.location.playerID]]
+						itemID := data.Datapackage[slot.Game].ItemNameToID[mwproto.StripDiscriminator(p.itemName)]
+						items[i] = approto.NetworkItem{
+							Item:     itemID,
+							Player:   p.location.playerID + 1,
+							Location: fromPkg.LocationNameToID[p.location.name],
+							Flags:    0,
+						}
+					}
+					index, err := state.addSentItems(items...)
+					if err != nil {
+						return err
+					}
+					apconn.Send(approto.ReceivedItems{
+						Cmd:   "ReceivedItems",
+						Index: index,
+						Items: items,
+					})
 				case "!release":
 					var messages []mwproto.DataSendMessage
 					var locations []int64
@@ -588,7 +604,7 @@ mainMessageLoop:
 								Item:     itemID,
 								Flags:    0,
 							}
-							index, err := state.addSentItem(item)
+							index, err := state.addSentItems(item)
 							if err != nil {
 								return err
 							}
@@ -625,7 +641,7 @@ mainMessageLoop:
 							Item:     ownItem[0],
 							Flags:    int(ownItem[2]),
 						}
-						index, err := state.addSentItem(item)
+						index, err := state.addSentItems(item)
 						if err != nil {
 							return err
 						}

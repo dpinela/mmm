@@ -86,15 +86,41 @@ func (ps *savefile) getConnectionParams() (playerID, randoID int, err error) {
 	return
 }
 
-func (ps *savefile) getOwnItemLocations() iter.Seq2[string, error] {
-	stmt := ps.db.Prepare("SELECT location_name FROM mw_own_item_placements ORDER BY location_name")
-	return execIter(stmt, func() string { return stmt.ReadString(0) })
+type qualifiedLocation struct {
+	playerID int
+	name     string
 }
 
-func (ps *savefile) getOwnWorldPlacements() iter.Seq2[ownPlacement, error] {
+type ownItemPlacement struct {
+	itemName string
+	location qualifiedLocation
+}
+
+func (ps *savefile) getOwnItemLocations() iter.Seq2[qualifiedLocation, error] {
+	stmt := ps.db.Prepare("SELECT location_name, source_player_id FROM mw_own_item_placements ORDER BY location_name")
+	return execIter(stmt, func() qualifiedLocation {
+		return qualifiedLocation{name: stmt.ReadString(0), playerID: stmt.ReadInt32(1)}
+	})
+}
+
+// Gets all of our own items that are in other worlds and haven't been received yet.
+func (ps *savefile) getCollectablePlacements(selfID int) (placements []ownItemPlacement, err error) {
+	stmt := ps.db.Prepare("SELECT item_name, location_name, source_player_id FROM mw_own_item_placements WHERE source_player_id != ? AND NOT EXISTS (SELECT 1 FROM mw_received_items WHERE label = ? AND content = item_name)")
+	stmt.BindInt(1, selfID)
+	stmt.BindString(2, mwproto.LabelMultiworldItem)
+	err = exec(stmt, func() {
+		placements = append(placements, ownItemPlacement{
+			itemName: stmt.ReadString(0),
+			location: qualifiedLocation{name: stmt.ReadString(1), playerID: stmt.ReadInt32(2)},
+		})
+	})
+	return
+}
+
+func (ps *savefile) getOwnWorldPlacements() iter.Seq2[ownWorldPlacement, error] {
 	stmt := ps.db.Prepare("SELECT ap_location_id, item_name, dest_player_id FROM mw_own_world_placements ORDER BY ap_location_id")
-	return execIter(stmt, func() ownPlacement {
-		return ownPlacement{
+	return execIter(stmt, func() ownWorldPlacement {
+		return ownWorldPlacement{
 			apLocationID: stmt.ReadInt64(0),
 			placedItem:   placedItem{name: stmt.ReadString(1), ownerID: stmt.ReadInt32(2)},
 		}
@@ -143,7 +169,7 @@ func execIter[T any](stmt *sqlite.Statement, f func() T) iter.Seq2[T, error] {
 	}
 }
 
-type ownPlacement struct {
+type ownWorldPlacement struct {
 	apLocationID int64
 	placedItem
 }
@@ -185,20 +211,34 @@ func (ps *savefile) clearLocations(ids ...int64) error {
 	return ps.db.Exec("COMMIT")
 }
 
-func (ps *savefile) addSentItem(item approto.NetworkItem) (index int, err error) {
+func (ps *savefile) addSentItems(items ...approto.NetworkItem) (index int, err error) {
+	index = -1
+	err = ps.db.Exec("BEGIN")
+	if err != nil {
+		return
+	}
+
 	stmt := ps.addSentItemStmt
-	stmt.BindInt64(1, item.Item)
-	stmt.BindInt64(2, item.Location)
-	stmt.BindInt(3, item.Player)
-	stmt.BindInt(4, item.Flags)
-	err = execOnce(stmt, func() {
-		// We rely on the database generating sequential IDs for rows in
-		// ap_sent_items. While this is not guaranteed in the general case,
-		// the algorithm described in https://www.sqlite.org/autoinc.html
-		// does work this way if no rows are ever deleted and no conflicts
-		// occur.
-		index = stmt.ReadInt32(0) - 1
-	})
+	for _, item := range items {
+		stmt.BindInt64(1, item.Item)
+		stmt.BindInt64(2, item.Location)
+		stmt.BindInt(3, item.Player)
+		stmt.BindInt(4, item.Flags)
+		err = execOnce(stmt, func() {
+			if index == -1 {
+				// We rely on the database generating sequential IDs for rows in
+				// ap_sent_items. While this is not guaranteed in the general case,
+				// the algorithm described in https://www.sqlite.org/autoinc.html
+				// does work this way if no rows are ever deleted and no conflicts
+				// occur.
+				index = stmt.ReadInt32(0) - 1
+			}
+		})
+		if err != nil {
+			return
+		}
+	}
+	err = ps.db.Exec("COMMIT")
 	return
 }
 
@@ -417,6 +457,7 @@ CREATE TABLE mw_own_world_placements (
 
 CREATE TABLE mw_own_item_placements (
 	item_name TEXT NOT NULL PRIMARY KEY,
+	source_player_id INTEGER NOT NULL REFERENCES mw_players (player_id),
 	location_name TEXT NOT NULL
 );
 
@@ -475,10 +516,15 @@ BEGIN;
 	}
 	stmt.Close()
 
-	stmt = db.Prepare("INSERT INTO mw_own_item_placements (item_name, location_name) VALUES (?, ?)")
+	stmt = db.Prepare("INSERT INTO mw_own_item_placements (item_name, location_name, source_player_id) VALUES (?, ?, ?)")
 	for item, loc := range result.PlayerItemsPlacements {
+		pid, locName, ok := mwproto.ParseQualifiedName(loc)
+		if !ok {
+			return fmt.Errorf("location without qualifier: %s", loc)
+		}
 		stmt.BindString(1, item)
-		stmt.BindString(2, loc)
+		stmt.BindString(2, locName)
+		stmt.BindInt(3, pid)
 		if err := stmt.Exec(); err != nil {
 			return err
 		}
