@@ -210,11 +210,8 @@ mainMessageLoop:
 				var locID int64
 				loc, err := state.getLocationOfOwnItem(msg.Content)
 				if err == nil {
-					_, loc, ok = mwproto.ParseQualifiedName(loc)
-					if ok {
-						fromPkg := dataPackages[games[msg.FromID]]
-						locID = fromPkg.LocationNameToID[loc]
-					}
+					fromPkg := dataPackages[games[msg.FromID]]
+					locID = fromPkg.LocationNameToID[loc]
 				} else if err != errZeroRows {
 					return err
 				}
@@ -393,6 +390,7 @@ mainMessageLoop:
 					itemHandling = *msg.ItemsHandling
 				}
 				itemHandling = *msg.ItemsHandling
+				// handle start inv? (precollected_items, dict[slot id -> list[item id]] in the apdata) from location -2 and slot 0
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
