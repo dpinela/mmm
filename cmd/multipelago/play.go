@@ -275,11 +275,8 @@ mainMessageLoop:
 						sentItem.Player = fromID + 1
 						loc, err := state.getLocationOfOwnItem(item.Content)
 						if err == nil {
-							_, loc, ok = mwproto.ParseQualifiedName(loc)
-							if ok {
-								fromPkg := dataPackages[games[fromID]]
-								sentItem.Location = fromPkg.LocationNameToID[loc]
-							}
+							fromPkg := dataPackages[games[fromID]]
+							sentItem.Location = fromPkg.LocationNameToID[loc]
 						} else if err != errZeroRows {
 							return err
 						}
