@@ -185,6 +185,11 @@ type NetworkItem struct {
 	Flags    int   `json:"flags"`
 }
 
+const (
+	ServerLocation = -2
+	ServerSlot     = 0
+)
+
 type SetMessage struct {
 	Key        string
 	Default    any

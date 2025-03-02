@@ -392,7 +392,7 @@ func openSavefile(loc string) (*savefile, error) {
 	}, nil
 }
 
-func createSavefile(loc string, result mwproto.ResultMessage) error {
+func createSavefile(loc string, result mwproto.ResultMessage, precollectedItems []int64) error {
 	db, err := sqlite.Open(loc)
 	if err != nil {
 		return err
@@ -533,6 +533,20 @@ BEGIN;
 		}
 	}
 	stmt.Close()
+
+	stmt = db.Prepare("INSERT INTO ap_sent_items (item_id, location_id, player_id, flags) VALUES (?, ?, ?, ?)")
+	for _, item := range precollectedItems {
+		stmt.BindInt64(1, item)
+		stmt.BindInt64(2, approto.ServerLocation)
+		stmt.BindInt(3, approto.ServerSlot)
+		stmt.BindInt(4, 0)
+		if err := stmt.Exec(); err != nil {
+			return err
+		}
+		if err := stmt.Reset(); err != nil {
+			return err
+		}
+	}
 
 	return db.Exec("COMMIT")
 }

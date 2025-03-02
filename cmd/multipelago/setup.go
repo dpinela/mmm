@@ -108,5 +108,5 @@ waitingForResult:
 		}
 	}
 
-	return createSavefile(opts.savefile, mwResult)
+	return createSavefile(opts.savefile, mwResult, data.PrecollectedItems[slotID])
 }
