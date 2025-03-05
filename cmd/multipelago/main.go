@@ -19,9 +19,9 @@ import (
 
 func main() {
 	var opts options
-	flag.StringVar(&opts.savefile, "savefile", "./multipelago.sqlite3", "Store multiworld result and game data in `file`")
+	flag.StringVar(&opts.savefile, "savefile", "./savefile.isthmus", "Store multiworld result and game data in `file`")
 	flag.StringVar(&opts.apfile, "apfile", "./AP.archipelago", "The Archipelago seed to serve")
-	flag.StringVar(&opts.mwserver, "mwserver", "127.0.0.1:38281", "The multiworld server to join")
+	flag.StringVar(&opts.mwserver, "mwserver", "mw.hkmp.org:38281", "The multiworld server to join")
 	flag.StringVar(&opts.mwroom, "mwroom", "eggu", "The room to join")
 	flag.IntVar(&opts.apport, "apport", 38281, "Serve Archipelago on port `port`")
 	flag.Parse()
