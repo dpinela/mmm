@@ -280,3 +280,11 @@ type SayMessage struct {
 }
 
 func (SayMessage) isClientMessage() {}
+
+type RoomUpdateMessage struct {
+	Cmd              string  `json:"cmd"`
+	HintPoints       int     `json:"hint_points"`
+	CheckedLocations []int64 `json:"checked_locations"`
+}
+
+func (RoomUpdateMessage) isServerMessage() {}

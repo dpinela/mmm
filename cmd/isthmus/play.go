@@ -652,6 +652,12 @@ mainMessageLoop:
 					if err := state.clearLocations(locID); err != nil {
 						return err
 					}
+
+					apconn.Send(approto.RoomUpdateMessage{
+						Cmd:              "RoomUpdate",
+						HintPoints:       0,
+						CheckedLocations: []int64{locID},
+					})
 				}
 			}
 		}
