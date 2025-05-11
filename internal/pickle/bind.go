@@ -161,6 +161,16 @@ func snakeCase(name string) string {
 
 func restrictMapKeysToStrings(x any) any {
 	switch x := x.(type) {
+	case map[any]struct{}:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			s, ok := k.(string)
+			if !ok {
+				continue
+			}
+			keys = append(keys, s)
+		}
+		return keys
 	case map[any]any:
 		m := make(map[string]any, len(x))
 		for k, v := range x {
