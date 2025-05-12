@@ -6,6 +6,7 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -604,6 +605,7 @@ mainMessageLoop:
 								return err
 							}
 							if itemHandling&approto.ReceiveOwnItems != 0 {
+								apconn.Send(itemSendNotification(playerID, item))
 								apconn.Send(approto.ReceivedItems{
 									Cmd:   "ReceivedItems",
 									Index: index,
@@ -611,6 +613,14 @@ mainMessageLoop:
 								})
 							}
 						} else {
+							itemName := prettifyName(p.name)
+							itemID := dataPackages[games[p.ownerID]].ItemNameToID[itemName]
+							apconn.Send(itemSendNotification(p.ownerID, approto.NetworkItem{
+								Location: locID,
+								Player:   playerID + 1,
+								Item:     itemID,
+								Flags:    0,
+							}))
 							msg := mwproto.DataSendMessage{
 								Label:   mwproto.LabelMultiworldItem,
 								Content: p.name,
@@ -661,6 +671,24 @@ mainMessageLoop:
 				}
 			}
 		}
+	}
+}
+
+func itemSendNotification(destID int, item approto.NetworkItem) approto.PrintJSONMessage {
+	return approto.PrintJSONMessage{
+		Cmd:  "PrintJSON",
+		Type: "ItemSend",
+		Data: []approto.JSONMessagePart{
+			{Type: approto.PartPlayerID, Text: strconv.Itoa(item.Player)},
+			{Text: " found "},
+			{Type: approto.PartPlayerID, Text: strconv.Itoa(destID + 1)},
+			{Text: "'s "},
+			{Type: approto.PartItemID, Text: fmt.Sprint(item.Item), Flags: &item.Flags, Player: destID + 1},
+			{Text: " at "},
+			{Type: approto.PartLocationID, Text: fmt.Sprint(item.Location), Player: item.Player},
+		},
+		Receiving: destID + 1,
+		Item:      item,
 	}
 }
 

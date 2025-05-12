@@ -288,3 +288,26 @@ type RoomUpdateMessage struct {
 }
 
 func (RoomUpdateMessage) isServerMessage() {}
+
+type PrintJSONMessage struct {
+	Cmd       string            `json:"cmd"`
+	Data      []JSONMessagePart `json:"data"`
+	Type      string            `json:"type"`
+	Receiving int               `json:"receiving"`
+	Item      NetworkItem       `json:"item"`
+}
+
+func (PrintJSONMessage) isServerMessage() {}
+
+type JSONMessagePart struct {
+	Type   string `json:"type,omitempty"`
+	Text   string `json:"text"`
+	Player int    `json:"player,omitempty"`
+	Flags  *int   `json:"flags,omitempty"`
+}
+
+const (
+	PartPlayerID   = "player_id"
+	PartItemID     = "item_id"
+	PartLocationID = "location_id"
+)
