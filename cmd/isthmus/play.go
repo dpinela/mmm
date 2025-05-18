@@ -15,7 +15,7 @@ import (
 )
 
 func playMW(opts options, data apdata) error {
-	server := approto.Serve(opts.apport)
+	server := approto.Serve(opts.apport, opts.verbose)
 	defer server.Close()
 	for {
 		conn := server.Accept()

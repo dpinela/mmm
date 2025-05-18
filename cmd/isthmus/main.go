@@ -24,6 +24,7 @@ func main() {
 	flag.StringVar(&opts.mwserver, "mwserver", "mw.hkmp.org:38281", "The multiworld server to join")
 	flag.StringVar(&opts.mwroom, "mwroom", "eggu", "The room to join")
 	flag.IntVar(&opts.apport, "apport", 38281, "Serve Archipelago on port `port`")
+	flag.BoolVar(&opts.verbose, "v", false, "Log all sent and received Archipelago messages")
 	flag.Parse()
 
 	if err := serve(opts); err != nil {
@@ -38,6 +39,7 @@ type options struct {
 	mwserver string
 	mwroom   string
 	apport   int
+	verbose  bool
 }
 
 type placedItem struct {

@@ -24,11 +24,13 @@ type Server struct {
 	numConnections atomic.Int32
 	connections    chan *ClientConn
 	httpServer     http.Server
+	verbose        bool
 }
 
-func Serve(port int) *Server {
+func Serve(port int, verbose bool) *Server {
 	listener := &Server{
 		connections: make(chan *ClientConn, 1),
+		verbose: verbose,
 	}
 	listener.httpServer.Addr = fmt.Sprintf("localhost:%d", port)
 	listener.httpServer.Handler = http.HandlerFunc(listener.handleConnection)
@@ -65,7 +67,6 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ls.numConnections.Add(-1)
-	log.Println("AP client connected")
 	// signal disconnection
 	cconn := &ClientConn{
 		inbox:  make(chan ClientMessage, 1),
@@ -82,6 +83,9 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					apconn.CloseNow()
 					return
+				}
+				if ls.verbose {
+					log.Printf("sending AP message: %+v", msg)
 				}
 				if err := wsjson.Write(ctx, apconn, []ServerMessage{msg}); err != nil {
 					log.Println("error writing AP message:", err)
@@ -107,6 +111,9 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, msg := range buf {
+			if ls.verbose {
+				log.Printf("received AP message: %s", msg)
+			}
 			if err := json.Unmarshal(msg, &unknownMessage); err != nil {
 				log.Println("error parsing AP command:", err)
 				continue
