@@ -372,7 +372,7 @@ mainMessageLoop:
 					}
 				}
 				missingLocationSet := map[int64]struct{}{}
-				for _, locID := range data.Datapackage[slot.Game].LocationNameToID {
+				for locID := range data.Locations[slotID] {
 					missingLocationSet[locID] = struct{}{}
 				}
 				checkedLocations, err := state.clearedLocations()
