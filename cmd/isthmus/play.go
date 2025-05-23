@@ -60,8 +60,8 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 		return err
 	}
 
-	games := make([]string, len(nicknames))
-	checksums := make([]string, len(nicknames))
+	games := make([]string, len(nicknames)+1)
+	checksums := make([]string, len(nicknames)+1)
 	dataPackages := map[string]*approto.DataPackage{}
 	for i, name := range nicknames {
 		if i == playerID {
@@ -73,6 +73,11 @@ func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error
 			LocationNameToID: map[string]int64{},
 			ItemNameToID:     map[string]int64{},
 		}
+	}
+	games[len(games)-1] = approto.ArchipelagoGameName
+	dataPackages[approto.ArchipelagoGameName] = &approto.DataPackage{
+		LocationNameToID: map[string]int64{"Nothing": -1},
+		ItemNameToID:     map[string]int64{"Cheat Console": -1, "Server": -2},
 	}
 
 	nextSynthItemID := int64(1)
@@ -387,8 +392,6 @@ mainMessageLoop:
 				} else {
 					itemHandling = *msg.ItemsHandling
 				}
-				itemHandling = *msg.ItemsHandling
-				// handle start inv? (precollected_items, dict[slot id -> list[item id]] in the apdata) from location -2 and slot 0
 				resp := approto.Connected{
 					Cmd:              "Connected",
 					Team:             0,
@@ -399,7 +402,7 @@ mainMessageLoop:
 					MissingLocations: slices.Sorted(maps.Keys(missingLocationSet)),
 					HintPoints:       0,
 				}
-				if msg.SlotData {
+				if msg.SlotData == nil || *msg.SlotData {
 					resp.SlotData = data.SlotData[slotID]
 				}
 				apconn.Send(resp)

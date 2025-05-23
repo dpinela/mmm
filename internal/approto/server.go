@@ -67,6 +67,7 @@ func (ls *Server) handleConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ls.numConnections.Add(-1)
+	apconn.SetReadLimit(1 << 24)
 	// signal disconnection
 	cconn := &ClientConn{
 		inbox:  make(chan ClientMessage, 1),

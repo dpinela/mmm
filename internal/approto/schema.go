@@ -72,6 +72,8 @@ func PermissionForMode(mode string) Permission {
 	}
 }
 
+const ArchipelagoGameName = "Archipelago"
+
 type DataPackage struct {
 	LocationNameToID map[string]int64 `json:"location_name_to_id"`
 	ItemNameToID     map[string]int64 `json:"item_name_to_id"`
@@ -120,7 +122,7 @@ type Connect struct {
 	Version       Version
 	ItemsHandling *ItemHandlingMode `json:"items_handling"`
 	Tags          []string
-	SlotData      bool `json:"slot_data"`
+	SlotData      *bool `json:"slot_data"`
 }
 
 func (Connect) isClientMessage() {}
