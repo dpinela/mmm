@@ -59,6 +59,7 @@ line (quoted if it contains spaces):
   defaults to 38281, the default port Archipelago normally uses.
 - `-savefile`: The path to your savefile. This is used to store information about item placements
   after the MW shuffle and to record exchanged items during your game.
+- `-v`: Writes all sent and received Archipelago messages to the console.
 
 [guide]: https://archipelago.gg/tutorial/Archipelago/setup/en#archipelago-setup-guide
 [srcguide]: https://github.com/ArchipelagoMW/Archipelago/blob/main/docs/running%20from%20source.md
@@ -73,9 +74,13 @@ The following clients are known to be compatible:
 
 - [Hollow Knight][hkap]
 - [TUNIC][tunc]
+- [Celeste (Open World)][clst]
+- [Balatro][jmbo]
 
 [hkap]: https://github.com/ArchipelagoMW-HollowKnight/Archipelago.HollowKnight
 [tunc]: https://github.com/silent-destroyer/tunic-randomizer/
+[clst]: https://github.com/PoryGoneDev/Celeste-Archipelago-Open-World
+[jmbo]: https://github.com/BurndiL/BalatroAP
 
 ## Feature limitations
 
