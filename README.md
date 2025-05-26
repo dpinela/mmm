@@ -52,7 +52,7 @@ same command you used to start it the first time.
 The `isthmus` command accepts these options; each should be followed by its argument on the command
 line (quoted if it contains spaces):
 
-- `-apfile`: The path to the .archipelago file.
+- `-apfile`: The path to the .archipelago or .zip file.
 - `-mwserver`: The MultiWorld server to use; defaults to the main MultiWorld public server at mw.hkmp.org.
 - `-mwroom`: The room to connect to.
 - `-apport`: The local port on which Isthmus will accept connections from your Archipelago client;
