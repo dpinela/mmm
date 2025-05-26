@@ -22,10 +22,10 @@ To use Isthmus, you will need to first generate a **solo** Archipelago seed with
 installation; see the [official guide][guide] for instructions on how to do this on Windows,
 or the [source installation instructions][srcguide] for other operating systems.
 
-Once generated, extract the .archipelago file from the archive that is placed in the `output`
-directory, and launch Isthmus from the command line like this:
+Once generated, note the name of the output zip file, and launch Isthmus from the command line
+like this:
 
-    isthmus -apfile /path/to/apfile.archipelago -mwroom eggu -savefile savefile.isthmus
+    isthmus -apfile /path/to/archipelago/output/AP_NNNNNNNNNNNNNNN.zip -mwroom eggu -savefile savefile.isthmus
 
 If you don't have the `isthmus` executable in your PATH, you will need to navigate to the directory
 where you put it first, and also invoke it as `./isthmus` if not on Windows. Make sure to replace

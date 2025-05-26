@@ -1,19 +1,19 @@
 package main
 
 import (
+	"archive/zip"
 	"bufio"
 	"compress/zlib"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/dpinela/mmm/internal/approto"
-	"github.com/dpinela/mmm/internal/mwproto"
 	"github.com/dpinela/mmm/internal/pickle"
 )
 
@@ -118,13 +118,39 @@ type apgamedata struct {
 }
 
 func readAPFile(name string) (data apdata, err error) {
-	const expectedAPFileVersion = 3
+	if strings.HasSuffix(name, ".zip") {
+		var z *zip.ReadCloser
+		z, err = zip.OpenReader(name)
+		if err != nil {
+			return
+		}
+		defer z.Close()
+		for _, file := range z.File {
+			if strings.HasSuffix(file.Name, ".archipelago") {
+				var found io.ReadCloser
+				found, err = file.Open()
+				if err != nil {
+					return
+				}
+				defer found.Close()
+				return readAPFileFromReader(found)
+			}
+		}
+		err = fmt.Errorf(".archipelago file not found in %s", name)
+		return
+	}
 
 	apfile, err := os.Open(name)
 	if err != nil {
 		return
 	}
 	defer apfile.Close()
+	return readAPFileFromReader(apfile)
+}
+
+func readAPFileFromReader(apfile io.Reader) (data apdata, err error) {
+	const expectedAPFileVersion = 3
+
 	r := bufio.NewReader(apfile)
 	version, err := r.ReadByte()
 	if err != nil {
@@ -147,27 +173,10 @@ func readAPFile(name string) (data apdata, err error) {
 
 var errConnectionLost = errors.New("connection lost")
 
-const mwResultFileName = "mwresult.json"
-
-func readMWResult(workdir string) (res mwproto.ResultMessage, err error) {
-	f, err := os.Open(filepath.Join(workdir, mwResultFileName))
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	err = json.NewDecoder(f).Decode(&res)
-	return
-}
-
 // This is the main item group used by the HK rando as well as
 // the sole item group used by Haiku and Death's Door for multiworld
 // purposes.
 const singularItemGroup = "Main Item Group"
-
-const (
-	fakeLocationName = "Somewhere"
-	fakeLocationID   = 1
-)
 
 var apServerVersion = approto.Version{
 	Minor: 5,
