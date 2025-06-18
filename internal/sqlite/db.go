@@ -87,6 +87,10 @@ func (s *Statement) BindBytes(param int, value []byte) {
 	must(C.sqlite3_bind_text(s.stmt, C.int(param), (*C.char)(unsafe.Pointer(unsafe.SliceData(value))), C.int(len(value)), C.SQLITE_TRANSIENT))
 }
 
+func (s *Statement) ReadBool(column int) bool {
+	return s.ReadInt32(column) == 1
+}
+
 func (s *Statement) ReadInt32(column int) int {
 	return int(C.sqlite3_column_int(s.stmt, C.int(column)))
 }
