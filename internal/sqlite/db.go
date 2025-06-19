@@ -32,6 +32,7 @@ func Open(location string) (*DB, error) {
 	if err != C.SQLITE_OK {
 		return nil, errorFromCode(err)
 	}
+	must(C.sqlite3_extended_result_codes(db.conn, 1))
 	return db, nil
 }
 
@@ -164,6 +165,14 @@ func must(code C.int) {
 	}
 }
 
-func errorFromCode(code C.int) error {
-	return errors.New(C.GoString(C.sqlite3_errstr(code)))
+type sqliteError int
+
+func (err sqliteError) Error() string {
+	return C.GoString(C.sqlite3_errstr(C.int(err)))
 }
+
+func errorFromCode(code C.int) error {
+	return sqliteError(code)
+}
+
+const ErrConstraintUnique = sqliteError(C.SQLITE_CONSTRAINT_UNIQUE)

@@ -12,6 +12,7 @@ type database struct {
 	conn            *sqlite.DB
 	hasMWResultStmt *sqlite.Statement
 	getRoomIDStmt   *sqlite.Statement
+	createRoomStmt  *sqlite.Statement
 }
 
 func openDB(filename string) (*database, error) {
@@ -73,6 +74,7 @@ func openDB(filename string) (*database, error) {
 	SELECT EXISTS(SELECT 1
 		FROM mw_result_placements mrp
 		JOIN mw_rooms mr ON mrp.rando_id = mr.id WHERE name = ?)`)
+	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name) VALUES (?) RETURNING id")
 	return db, nil
 }
 
@@ -92,14 +94,14 @@ func (db *database) idOfRoom(roomName string) (id int64, found bool, err error) 
 	return
 }
 
-func (db *database) hasMWResult(roomName string) (hasResult bool, err error) {
+func (db *database) createRoom(roomName string) (id int64, err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	stmt := db.hasMWResultStmt
+	stmt := db.createRoomStmt
 	stmt.BindString(1, roomName)
 	err = sqlitex.StepOnce(stmt, func() {
-		hasResult = stmt.ReadBool(0)
+		id = stmt.ReadInt64(0)
 	})
 	return
 }

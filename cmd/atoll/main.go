@@ -12,6 +12,8 @@ import (
 
 type serverConfig struct {
 	ListenAddress string
+	MWPort        string
+	ConsolePort   string
 }
 
 func main() {
@@ -36,7 +38,8 @@ func run(workdir string) error {
 	if err != nil {
 		return fmt.Errorf("open DB: %w", err)
 	}
-	return serve(cfg, db)
+	go serveConsole(&cfg, db)
+	return serve(&cfg, db)
 }
 
 func loadConfig(filename string) (cfg serverConfig, err error) {
@@ -54,8 +57,8 @@ func loadConfig(filename string) (cfg serverConfig, err error) {
 	return
 }
 
-func serve(cfg serverConfig, db *database) error {
-	listener, err := mwproto.Listen(cfg.ListenAddress)
+func serve(cfg *serverConfig, db *database) error {
+	listener, err := mwproto.Listen(cfg.ListenAddress + ":" + cfg.MWPort)
 	if err != nil {
 		return err
 	}

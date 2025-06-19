@@ -1,0 +1,5 @@
+/* Center everything */
+body {
+    margin: auto;
+    width: fit-content;
+}
