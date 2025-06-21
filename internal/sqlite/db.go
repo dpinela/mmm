@@ -12,6 +12,8 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"unsafe"
 )
 
@@ -44,7 +46,22 @@ func (db *DB) Prepare(sql string) *Statement {
 	n := len(db.statements)
 	db.statements = append(db.statements, Statement{})
 	s := &db.statements[n]
-	must(C.sqlite3_prepare_v2(db.conn, cPointer(sql), C.int(len(sql)), &s.stmt, nil))
+	res := C.sqlite3_prepare_v2(db.conn, cPointer(sql), C.int(len(sql)), &s.stmt, nil)
+	if res != C.SQLITE_OK {
+		var panicMsg strings.Builder
+		panicMsg.WriteString(C.GoString(C.sqlite3_errstr(res)))
+		offset := C.sqlite3_error_offset(db.conn)
+		if offset != -1 {
+			fmt.Fprintf(&panicMsg, "; at byte %d: ", offset)
+		} else {
+			panicMsg.WriteString(": ")
+		}
+		detailMsg := C.sqlite3_errmsg(db.conn)
+		if detailMsg != nil {
+			panicMsg.WriteString(C.GoString(detailMsg))
+		}
+		panic(panicMsg.String())
+	}
 	return s
 }
 

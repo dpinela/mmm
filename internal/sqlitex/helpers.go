@@ -30,3 +30,8 @@ func StepOnce(stmt *sqlite.Statement, rowHandler func()) error {
 	}
 	return stmt.Reset()
 }
+
+func Exec(stmt *sqlite.Statement) error {
+	defer stmt.Reset()
+	return stmt.Exec()
+}

@@ -88,6 +88,12 @@ func serveClient(conn *mwproto.ServerConn, db *database) {
 		log.Printf("unexpected message (awaiting connection) from %s: %+v", conn.RemoteAddr(), msg)
 	}
 
+	var (
+		roomID   int64
+		playerID int64
+	)
+
+waitingForReady:
 	for {
 		msg, ok := <-conn.Inbox()
 		if !ok {
@@ -103,20 +109,45 @@ func serveClient(conn *mwproto.ServerConn, db *database) {
 				conn.Send(mwproto.ReadyDenyMessage{Description: "invalid room mode"})
 				continue
 			}
-			rid, ok, err := db.idOfRoom(msg.Room)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			if !ok {
+			var err error
+			roomID, playerID, err = db.joinRoom(msg.Room, msg.Nickname)
+			if err == errRoomNotExist {
 				log.Printf("%s tried to access nonexistent room %q", conn.RemoteAddr(), msg.Room)
 				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
 				continue
 			}
-			log.Println(rid)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			conn.Send(mwproto.ReadyConfirmMessage{Ready: 1, Names: []string{msg.Nickname}})
 			conn.Send(mwproto.RequestRandoMessage{})
+			break waitingForReady
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %+v", conn.RemoteAddr(), msg)
+		}
+	}
+
+	log.Printf("room ID = %d; player ID = %d", roomID, playerID)
+
+	for {
+		msg, ok := <-conn.Inbox()
+		if !ok {
+			return
+		}
+		switch msg := msg.(type) {
+		case mwproto.RandoGeneratedMessage:
+			if err := db.attachRando(playerID, msg); err != nil {
+				log.Println(err)
+				return
+			}
+		case mwproto.DisconnectMessage:
+			log.Printf("connection from %s terminated", conn.RemoteAddr())
+			return
+		case mwproto.UnreadyMessage:
+			goto waitingForReady
+		default:
+			log.Printf("unexpected message (in room) from %s: %+v", conn.RemoteAddr(), msg)
 		}
 	}
 }
