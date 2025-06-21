@@ -3,15 +3,22 @@ package main
 import (
 	"embed"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/dpinela/mmm/internal/sqlite"
 )
 
 //go:embed static
 var staticPages embed.FS
+
+//go:embed templates
+var templatePages embed.FS
+
+var templates = template.Must(template.ParseFS(templatePages, "templates/*.html"))
 
 func serveConsole(cfg *serverConfig, db *database) {
 	mux := http.NewServeMux()
@@ -22,6 +29,9 @@ func serveConsole(cfg *serverConfig, db *database) {
 	mux.Handle("/", http.FileServerFS(static))
 	mux.HandleFunc("POST /create-room", func(w http.ResponseWriter, req *http.Request) {
 		createRoom(w, req, db)
+	})
+	mux.HandleFunc("GET /rooms/{randoID}", func(w http.ResponseWriter, req *http.Request) {
+		displayRoom(w, req, db)
 	})
 	err = http.ListenAndServe(cfg.ListenAddress+":"+cfg.ConsolePort, mux)
 	if err != nil {
@@ -46,4 +56,21 @@ func createRoom(w http.ResponseWriter, req *http.Request, db *database) {
 	}
 	log.Printf("created room %q with ID %d", name, id)
 	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", id), http.StatusSeeOther)
+}
+
+func displayRoom(w http.ResponseWriter, req *http.Request, db *database) {
+	rawRoomID := req.PathValue("randoID")
+	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	info, err := db.getRoomInfo(randoID)
+	if err == errRoomNotExist {
+		http.NotFound(w, req)
+		return
+	}
+	if err := templates.ExecuteTemplate(w, "room.html", info); err != nil {
+		log.Println(err)
+	}
 }

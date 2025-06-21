@@ -17,7 +17,9 @@ type database struct {
 	rollbackStmt            *sqlite.Statement
 	hasMWResultStmt         *sqlite.Statement
 	getRoomIDStmt           *sqlite.Statement
+	getRoomNameStmt         *sqlite.Statement
 	createRoomStmt          *sqlite.Statement
+	listRoomPlayersStmt     *sqlite.Statement
 	checkPlayerStmt         *sqlite.Statement
 	addPlayerStmt           *sqlite.Statement
 	setRandoSeedStmt        *sqlite.Statement
@@ -85,6 +87,7 @@ func openDB(filename string) (*database, error) {
 	db.commitStmt = conn.Prepare("COMMIT")
 	db.rollbackStmt = conn.Prepare("ROLLBACK")
 	db.getRoomIDStmt = conn.Prepare("SELECT id FROM mw_rooms WHERE name = ?")
+	db.getRoomNameStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
 	db.hasMWResultStmt = conn.Prepare(`
 	SELECT EXISTS(SELECT 1
 		FROM mw_result_placements mrp
@@ -95,6 +98,7 @@ func openDB(filename string) (*database, error) {
 	db.setRandoSeedStmt = conn.Prepare("UPDATE mw_players SET rando_seed = ? WHERE player_id = ?")
 	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE player_id = ?")
 	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?)")
+	db.listRoomPlayersStmt = conn.Prepare("SELECT player_id, nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY nickname")
 	return db, nil
 }
 
@@ -188,4 +192,45 @@ func (db *database) attachRando(playerID int64, rando mwproto.RandoGeneratedMess
 	}
 
 	return sqlitex.Exec(db.commitStmt)
+}
+
+type room struct {
+	ID      int64
+	Name    string
+	Players []player
+}
+
+type player struct {
+	ID       int64
+	Nickname string
+	HasSeed  bool
+}
+
+func (db *database) getRoomInfo(randoID int64) (room room, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	room.ID = randoID
+
+	stmt := db.getRoomNameStmt
+	stmt.BindInt64(1, randoID)
+	err = sqlitex.StepOnce(stmt, func() {
+		room.Name = stmt.ReadString(0)
+	})
+	if err == sqlitex.ErrZeroRows {
+		err = errRoomNotExist
+		return
+	}
+
+	stmt = db.listRoomPlayersStmt
+	stmt.BindInt64(1, randoID)
+
+	err = sqlitex.StepAll(stmt, func() {
+		room.Players = append(room.Players, player{
+			ID:       stmt.ReadInt64(0),
+			Nickname: stmt.ReadString(1),
+			HasSeed:  !stmt.IsNull(2),
+		})
+	})
+	return
 }

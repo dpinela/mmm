@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+    <head>
+        <title>{{.Name}} - Atoll</title>
+        <meta charset="utf-8">
+        <link rel="stylesheet" href="/theme.css">
+    </head>
+    <body>
+        <h1>Room {{.Name}}</h1>
+        <p>{{.Players | len}} players:</p>
+        <form action="/shuffle">
+            <input type="hidden" name="randoID" value="{{.ID}}">
+            <input type="submit" value="Shuffle">
+        </form>
+        <table>
+            <tr>
+                <th>Nickname</th>
+                <th>Ready</th>
+            </tr>
+            {{range .Players}}
+                <tr>
+                    <td>{{.Nickname}}</td>
+                    <td>{{if .HasSeed}} ✔️ {{else}} × {{end}}</td>
+                </tr>
+            {{end}}
+        </table>
+    </body>
+</html>

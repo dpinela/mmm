@@ -8,6 +8,7 @@ import (
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
 	"github.com/dpinela/mmm/internal/sqlite"
+	"github.com/dpinela/mmm/internal/sqlitex"
 )
 
 type savefile struct {
@@ -29,17 +30,7 @@ type savefile struct {
 }
 
 func exec(stmt *sqlite.Statement, rowHandler func()) error {
-	defer stmt.Reset()
-	for {
-		hasRow, err := stmt.Step()
-		if err != nil {
-			return err
-		}
-		if !hasRow {
-			return stmt.Reset()
-		}
-		rowHandler()
-	}
+	return sqlitex.StepAll(stmt, rowHandler)
 }
 
 var (
