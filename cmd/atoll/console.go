@@ -30,6 +30,9 @@ func serveConsole(cfg *serverConfig, db *database) {
 	mux.HandleFunc("POST /create-room", func(w http.ResponseWriter, req *http.Request) {
 		createRoom(w, req, db)
 	})
+	mux.HandleFunc("POST /shuffle", func(w http.ResponseWriter, req *http.Request) {
+		shuffleRoom(w, req, db)
+	})
 	mux.HandleFunc("GET /rooms/{randoID}", func(w http.ResponseWriter, req *http.Request) {
 		displayRoom(w, req, db)
 	})
@@ -73,4 +76,26 @@ func displayRoom(w http.ResponseWriter, req *http.Request, db *database) {
 	if err := templates.ExecuteTemplate(w, "room.html", info); err != nil {
 		log.Println(err)
 	}
+}
+
+func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database) {
+	req.ParseForm()
+	rawRoomID := req.FormValue("randoID")
+	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+	worlds, err := db.getAttachedRandos(randoID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	result := mix(worlds)
+	if err := db.saveShuffleResult(randoID, result); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	log.Println("rando generated for room", randoID)
+	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", randoID), http.StatusSeeOther)
 }

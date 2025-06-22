@@ -8,7 +8,7 @@
     <body>
         <h1>Room {{.Name}}</h1>
         <p>{{.Players | len}} players:</p>
-        <form action="/shuffle">
+        <form action="/shuffle" method="POST">
             <input type="hidden" name="randoID" value="{{.ID}}">
             <input type="submit" value="Shuffle">
         </form>
