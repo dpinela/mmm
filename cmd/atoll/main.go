@@ -88,10 +88,7 @@ func serveClient(conn *mwproto.ServerConn, db *database) {
 		log.Printf("unexpected message (awaiting connection) from %s: %+v", conn.RemoteAddr(), msg)
 	}
 
-	var (
-		roomID   int64
-		playerID int64
-	)
+	var roomInfo joinedRoom
 
 waitingForReady:
 	for {
@@ -110,7 +107,7 @@ waitingForReady:
 				continue
 			}
 			var err error
-			roomID, playerID, err = db.joinRoom(msg.Room, msg.Nickname)
+			roomInfo, err = db.joinRoom(msg.Room, msg.Nickname)
 			if err == errRoomNotExist {
 				log.Printf("%s tried to access nonexistent room %q", conn.RemoteAddr(), msg.Room)
 				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
@@ -128,7 +125,7 @@ waitingForReady:
 		}
 	}
 
-	log.Printf("room ID = %d; player ID = %d", roomID, playerID)
+	log.Printf("room ID = %d; player ID = %d", roomInfo.randoID, roomInfo.playerID)
 
 	for {
 		msg, ok := <-conn.Inbox()
@@ -137,9 +134,22 @@ waitingForReady:
 		}
 		switch msg := msg.(type) {
 		case mwproto.RandoGeneratedMessage:
-			if err := db.attachRando(playerID, msg); err != nil {
-				log.Println(err)
-				return
+			switch roomInfo.status {
+			case roomStatusOpen:
+				if err := db.attachRando(roomInfo.playerID, msg); err != nil {
+					log.Println(err)
+					return
+				}
+			case roomStatusShuffling:
+				log.Printf("room %d, player %d: tried to join with shuffle in progress", roomInfo.randoID, roomInfo.playerID)
+			case roomStatusShuffled:
+				result, err := db.getShuffleResult(roomInfo.randoID, roomInfo.playerID)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				log.Println("hash:", result.GeneratedHash)
+				conn.Send(result)
 			}
 		case mwproto.DisconnectMessage:
 			log.Printf("connection from %s terminated", conn.RemoteAddr())

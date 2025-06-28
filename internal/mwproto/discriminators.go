@@ -1,9 +1,14 @@
 package mwproto
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
+
+func QualifyName(pid int32, name string) string {
+	return fmt.Sprintf("MW(%d)_%s", pid, name)
+}
 
 func ParseQualifiedName(name string) (pid int, item string, ok bool) {
 	const prefix = "MW("

@@ -86,6 +86,10 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database) {
 		http.NotFound(w, req)
 		return
 	}
+	if err := db.lockRoom(randoID); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
 	worlds, err := db.getAttachedRandos(randoID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
