@@ -44,31 +44,37 @@ func openDB(filename string) (*database, error) {
 	
 	CREATE TABLE IF NOT EXISTS mw_players (
 		rando_id INTEGER NOT NULL REFERENCES mw_rooms (id),
-		player_id INTEGER PRIMARY KEY,
+		player_id INTEGER NOT NULL CHECK (player_id >= 0),
 		nickname TEXT NOT NULL,
 		rando_seed INTEGER,
 
 		UNIQUE (rando_id, nickname),
-		UNIQUE (rando_id, player_id)
+		PRIMARY KEY (rando_id, player_id)
 	);
 	
 	CREATE TABLE IF NOT EXISTS mw_player_placements (
-		player_id INTEGER NOT NULL REFERENCES mw_players (player_id),
+		rando_id INTEGER NOT NULL,
+		player_id INTEGER NOT NULL,
 		group_name TEXT NOT NULL,
 		index_ INTEGER NOT NULL,
 		item_name TEXT NOT NULL,
 		location_name TEXT NOT NULL,
 
-		PRIMARY KEY (player_id, group_name, index_)
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+
+		PRIMARY KEY (rando_id, player_id, group_name, index_)
 	);
 	
 	CREATE TABLE IF NOT EXISTS mw_ready_metadata (
-		player_id INTEGER NOT NULL REFERENCES mw_players (player_id),
+		rando_id INTEGER NOT NULL,
+		player_id INTEGER NOT NULL,
 		index_ INTEGER NOT NULL,
 		key TEXT NOT NULL,
 		value TEXT NOT NULL,
 
-		PRIMARY KEY (player_id, index_)
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+
+		PRIMARY KEY (rando_id, player_id, index_)
 	);
 	
 	CREATE TABLE IF NOT EXISTS mw_result_placements (
@@ -100,18 +106,17 @@ func openDB(filename string) (*database, error) {
 	db.getRoomNameStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
 	db.checkPlayerStmt = conn.Prepare("SELECT player_id FROM mw_players WHERE rando_id = ? AND nickname = ?")
-	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, nickname) VALUES (?, ?) RETURNING player_id")
+	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2) RETURNING player_id")
 	db.setRandoSeedStmt = conn.Prepare("UPDATE mw_players SET rando_seed = ? WHERE player_id = ?")
 	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE player_id = ?")
-	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?)")
-	db.listRoomPlayersStmt = conn.Prepare("SELECT player_id, nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY nickname")
+	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (rando_id, player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?, ?)")
+	db.listRoomPlayersStmt = conn.Prepare("SELECT nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY player_id")
 	db.setRoomStatusStmt = conn.Prepare("UPDATE mw_rooms SET status = ? WHERE id = ?")
 	db.getAllPlacementsStmt = conn.Prepare(`
-	SELECT mwpp.player_id, mwpp.group_name, mwpp.item_name, mwpp.location_name
-	FROM mw_player_placements mwpp
-		JOIN mw_players mwp ON mwpp.player_id = mwp.player_id
-	WHERE mwp.rando_id = ?
-	ORDER BY mwpp.player_id, mwpp.index_`)
+	SELECT player_id, group_name, item_name, location_name
+	FROM mw_player_placements
+	WHERE rando_id = ?
+	ORDER BY player_id, index_`)
 	db.addResultPlacementStmt = conn.Prepare(`
 	INSERT INTO mw_result_placements (rando_id, group_name, item_player_id, item_name, location_player_id, location_name)
 	VALUES (?, ?, ?, ?, ?, ?)`)
@@ -187,7 +192,7 @@ func (db *database) createRoom(roomName string) (id int64, err error) {
 	return
 }
 
-func (db *database) attachRando(playerID int64, rando mwproto.RandoGeneratedMessage) (err error) {
+func (db *database) attachRando(randoID int64, playerID int64, rando mwproto.RandoGeneratedMessage) (err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -208,11 +213,12 @@ func (db *database) attachRando(playerID int64, rando mwproto.RandoGeneratedMess
 		stmt = db.addPlacementStmt
 		for groupName, placements := range rando.Items {
 			for i, p := range placements {
-				stmt.BindInt64(1, playerID)
-				stmt.BindString(2, groupName)
-				stmt.BindInt(3, i)
-				stmt.BindString(4, p.Item)
-				stmt.BindString(5, p.Location)
+				stmt.BindInt64(1, randoID)
+				stmt.BindInt64(2, playerID)
+				stmt.BindString(3, groupName)
+				stmt.BindInt(4, i)
+				stmt.BindString(5, p.Item)
+				stmt.BindString(6, p.Location)
 				if err := sqlitex.Exec(stmt); err != nil {
 					return err
 				}
@@ -256,9 +262,8 @@ func (db *database) getRoomInfo(randoID int64) (room room, err error) {
 
 	err = sqlitex.StepAll(stmt, func() {
 		room.Players = append(room.Players, player{
-			ID:       stmt.ReadInt64(0),
-			Nickname: stmt.ReadString(1),
-			HasSeed:  !stmt.IsNull(2),
+			Nickname: stmt.ReadString(0),
+			HasSeed:  !stmt.IsNull(1),
 		})
 	})
 	return
@@ -268,36 +273,25 @@ func (db *database) getAttachedRandos(randoID int64) (worlds []world, err error)
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	type player struct {
-		playerID int64
-		seed     int
-	}
-
-	var players []player
+	var seeds []int
 
 	stmt := db.listRoomPlayersStmt
 	stmt.BindInt64(1, randoID)
 	err = sqlitex.StepAll(stmt, func() {
-		players = append(players, player{
-			playerID: stmt.ReadInt64(0),
-			seed:     stmt.ReadInt32(2),
-		})
+		seeds = append(seeds, stmt.ReadInt32(1))
 	})
 	if err != nil {
 		return
 	}
-	if len(players) == 0 {
+	if len(seeds) == 0 {
 		err = errRoomNotExist
 		return
 	}
 
-	worlds = make([]world, len(players))
-	worldMap := make(map[int64]*world, len(players))
-	for i, p := range players {
-		worlds[i].playerID = p.playerID
-		worlds[i].seed = int64(p.seed)
+	worlds = make([]world, len(seeds))
+	for i := range worlds {
+		worlds[i].playerID = int64(i)
 		worlds[i].placements = map[string][]sphere{}
-		worldMap[p.playerID] = &worlds[i]
 	}
 
 	stmt = db.getAllPlacementsStmt
@@ -308,7 +302,7 @@ func (db *database) getAttachedRandos(randoID int64) (worlds []world, err error)
 		item := stmt.ReadString(2)
 		location := stmt.ReadString(3)
 
-		placements := worldMap[playerID].placements
+		placements := worlds[playerID].placements
 		placements[groupName] = append(placements[groupName],
 			sphere{placement{Item: item, Location: location}})
 	})
@@ -355,20 +349,13 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	result.RandoID = int32(playerID)
-
-	pidmap := map[int64]int32{}
+	result.RandoID = int32(randoID)
+	result.PlayerID = int32(playerID)
 
 	stmt := db.listRoomPlayersStmt
 	stmt.BindInt64(1, randoID)
 	err = sqlitex.StepAll(stmt, func() {
-		internalPID := stmt.ReadInt64(0)
-		externalPID := int32(len(result.Nicknames))
-		if internalPID == playerID {
-			result.PlayerID = externalPID
-		}
-		pidmap[internalPID] = externalPID
-		result.Nicknames = append(result.Nicknames, stmt.ReadString(1))
+		result.Nicknames = append(result.Nicknames, stmt.ReadString(0))
 	})
 	if err != nil {
 		return
@@ -392,13 +379,13 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 
 		if locationPID == playerID {
 			result.Placements[group] = append(result.Placements[group], mwproto.ResultPlacement{
-				Item:     mwproto.QualifyName(pidmap[itemPID], itemName),
+				Item:     mwproto.QualifyName(int32(itemPID), itemName),
 				Location: locationName,
 			})
 		}
 
 		if itemPID == playerID {
-			result.PlayerItemsPlacements[itemName] = mwproto.QualifyName(pidmap[locationPID], locationName)
+			result.PlayerItemsPlacements[itemName] = mwproto.QualifyName(int32(locationPID), locationName)
 		}
 
 		fmt.Fprintf(hasher, "%d,%s,%d,%s", itemPID, itemName, locationPID, locationName)

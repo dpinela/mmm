@@ -90,7 +90,7 @@ func serveClient(conn *mwproto.ServerConn, db *database) {
 
 	var roomInfo joinedRoom
 
-waitingForReady:
+waitingForReadyOrJoin:
 	for {
 		msg, ok := <-conn.Inbox()
 		if !ok {
@@ -119,7 +119,9 @@ waitingForReady:
 			}
 			conn.Send(mwproto.ReadyConfirmMessage{Ready: 1, Names: []string{msg.Nickname}})
 			conn.Send(mwproto.RequestRandoMessage{})
-			break waitingForReady
+			break waitingForReadyOrJoin
+		case mwproto.JoinMessage:
+			conn.Send(mwproto.JoinConfirmMessage{})
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %+v", conn.RemoteAddr(), msg)
 		}
@@ -136,7 +138,7 @@ waitingForReady:
 		case mwproto.RandoGeneratedMessage:
 			switch roomInfo.status {
 			case roomStatusOpen:
-				if err := db.attachRando(roomInfo.playerID, msg); err != nil {
+				if err := db.attachRando(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
 					log.Println(err)
 					return
 				}
@@ -155,7 +157,7 @@ waitingForReady:
 			log.Printf("connection from %s terminated", conn.RemoteAddr())
 			return
 		case mwproto.UnreadyMessage:
-			goto waitingForReady
+			goto waitingForReadyOrJoin
 		default:
 			log.Printf("unexpected message (in room) from %s: %+v", conn.RemoteAddr(), msg)
 		}
