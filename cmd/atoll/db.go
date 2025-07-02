@@ -17,6 +17,7 @@ type database struct {
 	beginStmt               *sqlite.Statement
 	commitStmt              *sqlite.Statement
 	rollbackStmt            *sqlite.Statement
+	checkRoomJoinableStmt   *sqlite.Statement
 	getRoomInfoStmt         *sqlite.Statement
 	getRoomNameStmt         *sqlite.Statement
 	createRoomStmt          *sqlite.Statement
@@ -30,6 +31,10 @@ type database struct {
 	getAllPlacementsStmt    *sqlite.Statement
 	addResultPlacementStmt  *sqlite.Statement
 	getResultPlacementsStmt *sqlite.Statement
+	sendItemStmt            *sqlite.Statement
+	getSentItemsStmt        *sqlite.Statement
+	confirmItemStmt         *sqlite.Statement
+	markItemsAsSavedStmt    *sqlite.Statement
 }
 
 func openDB(filename string) (*database, error) {
@@ -87,7 +92,22 @@ func openDB(filename string) (*database, error) {
 
 		FOREIGN KEY (rando_id, item_player_id) REFERENCES mw_players (rando_id, player_id),
 		FOREIGN KEY (rando_id, location_player_id) REFERENCES mw_players (rando_id, player_id)
-	);`
+	);
+	
+	CREATE TABLE IF NOT EXISTS mw_sent_items (
+		rando_id INTEGER NOT NULL,
+		sender_id INTEGER NOT NULL,
+		destination_player_id INTEGER NOT NULL,
+		label TEXT NOT NULL,
+		content TEXT NOT NULL,
+		status INTEGER NOT NULL,
+
+		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id)
+	);
+	
+	CREATE INDEX IF NOT EXISTS unconfirmed_items_by_recipient ON mw_sent_items (rando_id, destination_player_id);
+	`
 
 	conn, err := sqlite.Open(filename)
 	if err != nil {
@@ -102,6 +122,9 @@ func openDB(filename string) (*database, error) {
 	db.beginStmt = conn.Prepare("BEGIN")
 	db.commitStmt = conn.Prepare("COMMIT")
 	db.rollbackStmt = conn.Prepare("ROLLBACK")
+	db.checkRoomJoinableStmt = conn.Prepare(`
+	SELECT mr.status FROM mw_players mp JOIN mw_rooms mr ON mp.rando_id = mr.id
+	WHERE mp.rando_id = ? AND mp.player_id = ?`)
 	db.getRoomInfoStmt = conn.Prepare("SELECT id, status FROM mw_rooms WHERE name = ?")
 	db.getRoomNameStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
@@ -124,17 +147,32 @@ func openDB(filename string) (*database, error) {
 	SELECT group_name, item_player_id, item_name, location_player_id, location_name
 	FROM mw_result_placements WHERE rando_id = ?
 	ORDER BY location_player_id, location_name`)
+	db.sendItemStmt = conn.Prepare("INSERT INTO mw_sent_items (rando_id, sender_id, destination_player_id, label, content, status) VALUES (?, ?, ?, ?, ?, 0)")
+	db.getSentItemsStmt = conn.Prepare(`
+	SELECT msi.sender_id, mp.nickname, msi.label, msi.content
+	FROM mw_sent_items msi
+		JOIN mw_players mp ON msi.rando_id = mp.rando_id AND msi.sender_id = mp.player_id
+	WHERE msi.rando_id = ? AND msi.destination_player_id = ? AND msi.status < ?`)
+	db.confirmItemStmt = conn.Prepare("UPDATE mw_sent_items SET status = 1 WHERE rando_id = ? AND destination_player_id = ? AND sender_id = ? AND label = ? AND content = ?")
+	db.markItemsAsSavedStmt = conn.Prepare("UPDATE mw_sent_items SET status = 2 WHERE rando_id = ? AND destination_player_id = ? AND status = 1")
 	return db, nil
 }
 
 var (
-	errRoomNotExist = errors.New("room does not exist")
+	errRoomNotExist    = errors.New("room does not exist")
+	errRoomNotShuffled = errors.New("room is not yet shuffled")
 )
 
 const (
 	roomStatusOpen = iota
 	roomStatusShuffling
 	roomStatusShuffled
+)
+
+const (
+	itemStatusUnconfirmed = iota
+	itemStatusConfirmed
+	itemStatusSaved
 )
 
 type joinedRoom struct {
@@ -178,6 +216,103 @@ func (db *database) joinRoom(roomName string, nickname string) (room joinedRoom,
 		room.playerID = stmt.ReadInt64(0)
 	})
 	return
+}
+
+func (db *database) joinShuffledRoom(randoID int32, playerID int32) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.checkRoomJoinableStmt
+	defer stmt.Reset()
+	stmt.BindInt(1, int(randoID))
+	stmt.BindInt(2, int(playerID))
+	found, err := stmt.Step()
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errRoomNotExist
+	}
+	if stmt.ReadInt32(0) != roomStatusShuffled {
+		return errRoomNotShuffled
+	}
+	return nil
+}
+
+func (db *database) sendItem(randoID, selfID, destinationID int64, label, content string) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.sendItemStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, selfID)
+	stmt.BindInt64(3, destinationID)
+	stmt.BindString(4, label)
+	stmt.BindString(5, content)
+	return sqlitex.Exec(stmt)
+}
+
+func (db *database) getItemsWithStatusBelow(randoID, playerID int64, status int) (items []mwproto.DataReceiveMessage, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.getSentItemsStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	stmt.BindInt(3, status)
+
+	err = sqlitex.StepAll(stmt, func() {
+		items = append(items, mwproto.DataReceiveMessage{
+			FromID:  int32(stmt.ReadInt32(0)),
+			From:    stmt.ReadString(1),
+			Label:   stmt.ReadString(2),
+			Content: stmt.ReadString(3),
+		})
+	})
+	return
+}
+
+func (db *database) getUnconfirmedItems(randoID, playerID int64) ([]mwproto.DataReceiveMessage, error) {
+	return db.getItemsWithStatusBelow(randoID, playerID, itemStatusConfirmed)
+}
+
+func (db *database) getUnsavedItems(randoID, playerID int64) ([]mwproto.DataReceiveMessage, error) {
+	return db.getItemsWithStatusBelow(randoID, playerID, itemStatusSaved)
+}
+
+func (db *database) confirmItem(randoID, playerID int64, item mwproto.DataReceiveConfirmMessage) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var senderID int64
+
+	stmt := db.checkPlayerStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindString(2, item.From)
+	err := sqlitex.StepOnce(stmt, func() {
+		senderID = stmt.ReadInt64(0)
+	})
+	if err != nil {
+		return err
+	}
+
+	stmt = db.confirmItemStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	stmt.BindInt64(3, senderID)
+	stmt.BindString(4, item.Label)
+	stmt.BindString(5, item.Data)
+	return sqlitex.Exec(stmt)
+}
+
+func (db *database) markConfirmedItemsSaved(randoID, playerID int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.markItemsAsSavedStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	return sqlitex.Exec(stmt)
 }
 
 func (db *database) createRoom(roomName string) (id int64, err error) {

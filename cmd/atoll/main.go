@@ -38,8 +38,9 @@ func run(workdir string) error {
 	if err != nil {
 		return fmt.Errorf("open DB: %w", err)
 	}
+	nf := newNotifier()
 	go serveConsole(&cfg, db)
-	return serve(&cfg, db)
+	return serve(&cfg, db, nf)
 }
 
 func loadConfig(filename string) (cfg serverConfig, err error) {
@@ -57,7 +58,7 @@ func loadConfig(filename string) (cfg serverConfig, err error) {
 	return
 }
 
-func serve(cfg *serverConfig, db *database) error {
+func serve(cfg *serverConfig, db *database, nf *notifier) error {
 	listener, err := mwproto.Listen(cfg.ListenAddress + ":" + cfg.MWPort)
 	if err != nil {
 		return err
@@ -69,11 +70,11 @@ func serve(cfg *serverConfig, db *database) error {
 			log.Println(err)
 			continue
 		}
-		go serveClient(conn, db)
+		go serveClient(conn, db, nf)
 	}
 }
 
-func serveClient(conn *mwproto.ServerConn, db *database) {
+func serveClient(conn *mwproto.ServerConn, db *database, nf *notifier) {
 	defer conn.Close()
 
 	for {
@@ -85,10 +86,13 @@ func serveClient(conn *mwproto.ServerConn, db *database) {
 			conn.Send(mwproto.ConnectMessage{ServerName: "Atoll"})
 			break
 		}
-		log.Printf("unexpected message (awaiting connection) from %s: %+v", conn.RemoteAddr(), msg)
+		log.Printf("unexpected message (awaiting connection) from %s: %#v", conn.RemoteAddr(), msg)
 	}
 
 	var roomInfo joinedRoom
+	// More than one pending notification is redundant anyway. The sending side will drop
+	// redundant ones automatically.
+	itemNotifications := make(chan struct{}, 1)
 
 waitingForReadyOrJoin:
 	for {
@@ -121,9 +125,23 @@ waitingForReadyOrJoin:
 			conn.Send(mwproto.RequestRandoMessage{})
 			break waitingForReadyOrJoin
 		case mwproto.JoinMessage:
-			conn.Send(mwproto.JoinConfirmMessage{})
+			log.Printf("%#v", msg)
+			err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)
+			switch err {
+			case nil:
+				roomInfo.randoID = int64(msg.RandoID)
+				roomInfo.playerID = int64(msg.PlayerID)
+				goto inRando
+				// get all pending items
+			case errRoomNotExist, errRoomNotShuffled:
+				log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
+				continue
+			default:
+				log.Println(err)
+				return
+			}
 		default:
-			log.Printf("unexpected message (awaiting ready) from %s: %+v", conn.RemoteAddr(), msg)
+			log.Printf("unexpected message (awaiting ready) from %s: %#v", conn.RemoteAddr(), msg)
 		}
 	}
 
@@ -158,8 +176,79 @@ waitingForReadyOrJoin:
 			return
 		case mwproto.UnreadyMessage:
 			goto waitingForReadyOrJoin
+		case mwproto.JoinMessage:
+			log.Printf("%#v", msg)
+			err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)
+			switch err {
+			case nil:
+				roomInfo.randoID = int64(msg.RandoID)
+				roomInfo.playerID = int64(msg.PlayerID)
+				goto inRando
+				// get all pending items
+			case errRoomNotExist, errRoomNotShuffled:
+				log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
+				continue
+			default:
+				log.Println(err)
+				return
+			}
 		default:
-			log.Printf("unexpected message (in room) from %s: %+v", conn.RemoteAddr(), msg)
+			log.Printf("unexpected message (in room) from %s: %#v", conn.RemoteAddr(), msg)
+		}
+	}
+
+inRando:
+	conn.Send(mwproto.JoinConfirmMessage{})
+	nf.listenNewItems(subscriberID{playerID: roomInfo.playerID, randoID: roomInfo.randoID}, itemNotifications)
+
+	pendingItems, err := db.getUnsavedItems(roomInfo.randoID, roomInfo.playerID)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	log.Printf("joined rando %d as player %d; sending %d unsaved items", roomInfo.randoID, roomInfo.playerID, len(pendingItems))
+
+	for _, item := range pendingItems {
+		conn.Send(item)
+	}
+
+	for {
+		select {
+		case msg, ok := <-conn.Inbox():
+			if !ok {
+				return
+			}
+			switch msg := msg.(type) {
+			case mwproto.DataSendMessage:
+				if err := db.sendItem(roomInfo.randoID, roomInfo.playerID, int64(msg.To), msg.Label, msg.Content); err != nil {
+					log.Println(err)
+					return
+				}
+				conn.Send(mwproto.DataSendConfirmMessage{Label: msg.Label, Content: msg.Content, To: msg.To})
+				nf.notifyNewItems(subscriberID{randoID: roomInfo.randoID, playerID: int64(msg.To)})
+			case mwproto.DataReceiveConfirmMessage:
+				if err := db.confirmItem(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
+					log.Println(err)
+					return
+				}
+			case mwproto.SaveMessage:
+				if err := db.markConfirmedItemsSaved(roomInfo.randoID, roomInfo.playerID); err != nil {
+					log.Println(err)
+					return
+				}
+			case mwproto.DisconnectMessage:
+				log.Printf("connection from %s terminated", conn.RemoteAddr())
+				return
+			}
+		case <-itemNotifications:
+			items, err := db.getUnconfirmedItems(roomInfo.randoID, roomInfo.playerID)
+			if err != nil {
+				return
+			}
+			for _, item := range items {
+				conn.Send(item)
+			}
 		}
 	}
 }

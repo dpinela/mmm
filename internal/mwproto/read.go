@@ -57,10 +57,16 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[RandoGeneratedMessage](payload)
 	case typeResult:
 		return unmarshal[ResultMessage](payload)
+	case typeSave:
+		return SaveMessage{}, nil
 	case typeDataReceive:
 		return unmarshal[DataReceiveMessage](payload)
+	case typeDataReceiveConfirm:
+		return unmarshal[DatasReceiveConfirmMessage](payload)
 	case typeDatasReceive:
 		return unmarshal[DatasReceiveMessage](payload)
+	case typeDataSend:
+		return unmarshal[DataSendMessage](payload)
 	case typeDataSendConfirm:
 		return unmarshal[DataSendConfirmMessage](payload)
 	case typeAnnounceCharmNotchCosts:
