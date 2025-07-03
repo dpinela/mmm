@@ -132,7 +132,6 @@ waitingForReadyOrJoin:
 				roomInfo.randoID = int64(msg.RandoID)
 				roomInfo.playerID = int64(msg.PlayerID)
 				goto inRando
-				// get all pending items
 			case errRoomNotExist, errRoomNotShuffled:
 				log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
 				continue
