@@ -89,6 +89,7 @@ func openDB(filename string) (*database, error) {
 		group_name TEXT NOT NULL,
 		location_player_id INTEGER NOT NULL,
 		location_name TEXT NOT NULL,
+		location_index INTEGER NOT NULL,
 
 		FOREIGN KEY (rando_id, item_player_id) REFERENCES mw_players (rando_id, player_id),
 		FOREIGN KEY (rando_id, location_player_id) REFERENCES mw_players (rando_id, player_id)
@@ -136,17 +137,17 @@ func openDB(filename string) (*database, error) {
 	db.listRoomPlayersStmt = conn.Prepare("SELECT nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY player_id")
 	db.setRoomStatusStmt = conn.Prepare("UPDATE mw_rooms SET status = ? WHERE id = ?")
 	db.getAllPlacementsStmt = conn.Prepare(`
-	SELECT player_id, group_name, item_name, location_name
+	SELECT player_id, group_name, item_name, location_name, index_
 	FROM mw_player_placements
 	WHERE rando_id = ?
 	ORDER BY player_id, index_`)
 	db.addResultPlacementStmt = conn.Prepare(`
-	INSERT INTO mw_result_placements (rando_id, group_name, item_player_id, item_name, location_player_id, location_name)
-	VALUES (?, ?, ?, ?, ?, ?)`)
+	INSERT INTO mw_result_placements (rando_id, group_name, item_player_id, item_name, location_player_id, location_name, location_index)
+	VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	db.getResultPlacementsStmt = conn.Prepare(`
 	SELECT group_name, item_player_id, item_name, location_player_id, location_name
 	FROM mw_result_placements WHERE rando_id = ?
-	ORDER BY location_player_id, location_name`)
+	ORDER BY location_player_id, location_index`)
 	db.sendItemStmt = conn.Prepare("INSERT INTO mw_sent_items (rando_id, sender_id, destination_player_id, label, content, status) VALUES (?, ?, ?, ?, ?, 0)")
 	db.getSentItemsStmt = conn.Prepare(`
 	SELECT msi.sender_id, mp.nickname, msi.label, msi.content
@@ -436,10 +437,11 @@ func (db *database) getAttachedRandos(randoID int64) (worlds []world, err error)
 		groupName := stmt.ReadString(1)
 		item := stmt.ReadString(2)
 		location := stmt.ReadString(3)
+		i := stmt.ReadInt32(4)
 
 		placements := worlds[playerID].placements
 		placements[groupName] = append(placements[groupName],
-			sphere{placement{Item: item, Location: location}})
+			sphere{placement{Item: item, Location: location, Index: i}})
 	})
 	return
 }
@@ -467,6 +469,7 @@ func (db *database) saveShuffleResult(randoID int64, placements []mixedPlacement
 			stmt.BindString(4, p.Item.Name)
 			stmt.BindInt64(5, p.Location.World)
 			stmt.BindString(6, p.Location.Name)
+			stmt.BindInt(7, p.Location.Index)
 			if err := sqlitex.Exec(stmt); err != nil {
 				return err
 			}
@@ -501,7 +504,12 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 	result.Placements = map[string][]mwproto.ResultPlacement{}
 	result.PlayerItemsPlacements = map[string]string{}
 	result.ItemsSpoiler.IndividualWorldSpoilers = map[string]string{}
+	// We need all these slices to be non-nil so that they will be non-null in the JSON
+	// encoding.
 	result.ReadyMetadata = make([][]mwproto.KeyValuePair, len(result.Nicknames))
+	for i := range result.ReadyMetadata {
+		result.ReadyMetadata[i] = []mwproto.KeyValuePair{}
+	}
 
 	stmt = db.getResultPlacementsStmt
 	stmt.BindInt64(1, randoID)

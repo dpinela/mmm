@@ -198,7 +198,9 @@ waitingForReadyOrJoin:
 
 inRando:
 	conn.Send(mwproto.JoinConfirmMessage{})
-	nf.listenNewItems(subscriberID{playerID: roomInfo.playerID, randoID: roomInfo.randoID}, itemNotifications)
+	sid := subscriberID{playerID: roomInfo.playerID, randoID: roomInfo.randoID}
+	nf.listenNewItems(sid, itemNotifications)
+	defer nf.muteNewItems(sid, itemNotifications)
 
 	pendingItems, err := db.getUnsavedItems(roomInfo.randoID, roomInfo.playerID)
 	if err != nil {

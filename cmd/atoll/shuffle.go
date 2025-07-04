@@ -16,6 +16,9 @@ type world struct {
 type placement struct {
 	Item     string
 	Location string
+	// the index of the placement in the original seed; used to ensure the result
+	// for each player features locations in the same order as their submitted seed
+	Index int
 }
 
 type sphere []placement
@@ -31,7 +34,10 @@ type qualifiedName struct {
 	Name  string
 }
 
-type qualifiedLocation qualifiedName
+type qualifiedLocation struct {
+	qualifiedName
+	Index int
+}
 type qualifiedItem qualifiedName
 
 func mix(worlds []world) []mixedPlacement {
@@ -78,7 +84,7 @@ func mixGroup(rng *rand.Rand, worlds []groupWorld, groupName string) []mixedPlac
 		}
 		nextSpheres[i] = upcomingSphere{index: 1, itemsToUnlock: len(w.spheres[0])}
 		for _, p := range w.spheres[0] {
-			availableLocations = append(availableLocations, qualifiedLocation{World: w.playerID, Name: p.Location})
+			availableLocations = append(availableLocations, qualifiedLocation{qualifiedName{World: w.playerID, Name: p.Location}, p.Index})
 			availableItems = append(availableItems, qualifiedItem{World: w.playerID, Name: p.Item})
 		}
 	}
@@ -108,7 +114,7 @@ func mixGroup(rng *rand.Rand, worlds []groupWorld, groupName string) []mixedPlac
 			ns.index++
 			ns.itemsToUnlock = len(newSphere)
 			for _, p := range newSphere {
-				availableLocations = append(availableLocations, qualifiedLocation{World: item.World, Name: p.Location})
+				availableLocations = append(availableLocations, qualifiedLocation{qualifiedName{World: item.World, Name: p.Location}, p.Index})
 				availableItems = append(availableItems, qualifiedItem{World: item.World, Name: p.Item})
 			}
 		}
