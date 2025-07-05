@@ -27,6 +27,8 @@ type database struct {
 	setRandoSeedStmt        *sqlite.Statement
 	deleteAllPlacementsStmt *sqlite.Statement
 	addPlacementStmt        *sqlite.Statement
+	getPlayerSeedStmt       *sqlite.Statement
+	getPlayerPlacementsStmt *sqlite.Statement
 	setRoomStatusStmt       *sqlite.Statement
 	getAllPlacementsStmt    *sqlite.Statement
 	addResultPlacementStmt  *sqlite.Statement
@@ -134,6 +136,8 @@ func openDB(filename string) (*database, error) {
 	db.setRandoSeedStmt = conn.Prepare("UPDATE mw_players SET rando_seed = ? WHERE player_id = ?")
 	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE player_id = ?")
 	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (rando_id, player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?, ?)")
+	db.getPlayerSeedStmt = conn.Prepare("SELECT rando_seed FROM mw_players WHERE rando_id = ? AND player_id = ?")
+	db.getPlayerPlacementsStmt = conn.Prepare("SELECT group_name, item_name, location_name FROM mw_player_placements WHERE rando_id = ? AND player_id = ? ORDER BY index_")
 	db.listRoomPlayersStmt = conn.Prepare("SELECT nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY player_id")
 	db.setRoomStatusStmt = conn.Prepare("UPDATE mw_rooms SET status = ? WHERE id = ?")
 	db.getAllPlacementsStmt = conn.Prepare(`
@@ -363,6 +367,35 @@ func (db *database) attachRando(randoID int64, playerID int64, rando mwproto.Ran
 
 		return nil
 	})
+}
+
+func (db *database) getAttachedRando(randoID, playerID int64) (rando mwproto.RandoGeneratedMessage, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.getPlayerSeedStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	err = sqlitex.StepOnce(stmt, func() {
+		rando.Seed = int32(stmt.ReadInt32(0))
+	})
+	if err != nil {
+		return
+	}
+
+	rando.Items = map[string][]mwproto.Placement{}
+	stmt = db.getPlayerPlacementsStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	err = sqlitex.StepAll(stmt, func() {
+		group := stmt.ReadString(0)
+		itemName := stmt.ReadString(1)
+		locationName := stmt.ReadString(2)
+
+		rando.Items[group] = append(rando.Items[group],
+			mwproto.Placement{Item: itemName, Location: locationName})
+	})
+	return
 }
 
 type room struct {

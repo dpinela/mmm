@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/dpinela/mmm/internal/mwproto"
 )
@@ -167,7 +168,15 @@ waitingForReadyOrJoin:
 					log.Println(err)
 					return
 				}
+				origSeed, err := db.getAttachedRando(roomInfo.randoID, roomInfo.playerID)
+				if err != nil {
+					log.Println(err)
+					return
+				}
 				log.Println("hash:", result.GeneratedHash)
+				if !reflect.DeepEqual(origSeed, msg) {
+					result.GeneratedHash = "ERROR: seed does not match original"
+				}
 				conn.Send(result)
 			}
 		case mwproto.DisconnectMessage:
