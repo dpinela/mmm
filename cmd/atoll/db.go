@@ -18,8 +18,8 @@ type database struct {
 	commitStmt              *sqlite.Statement
 	rollbackStmt            *sqlite.Statement
 	checkRoomJoinableStmt   *sqlite.Statement
-	getRoomInfoStmt         *sqlite.Statement
-	getRoomNameStmt         *sqlite.Statement
+	getRoomInfoByNameStmt   *sqlite.Statement
+	getRoomInfoByIDStmt     *sqlite.Statement
 	createRoomStmt          *sqlite.Statement
 	listRoomPlayersStmt     *sqlite.Statement
 	checkPlayerStmt         *sqlite.Statement
@@ -128,8 +128,8 @@ func openDB(filename string) (*database, error) {
 	db.checkRoomJoinableStmt = conn.Prepare(`
 	SELECT mr.status FROM mw_players mp JOIN mw_rooms mr ON mp.rando_id = mr.id
 	WHERE mp.rando_id = ? AND mp.player_id = ?`)
-	db.getRoomInfoStmt = conn.Prepare("SELECT id, status FROM mw_rooms WHERE name = ?")
-	db.getRoomNameStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
+	db.getRoomInfoByNameStmt = conn.Prepare("SELECT id, status FROM mw_rooms WHERE name = ?")
+	db.getRoomInfoByIDStmt = conn.Prepare("SELECT name, status FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
 	db.checkPlayerStmt = conn.Prepare("SELECT player_id FROM mw_players WHERE rando_id = ? AND nickname = ?")
 	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2) RETURNING player_id")
@@ -190,7 +190,7 @@ func (db *database) joinRoom(roomName string, nickname string) (room joinedRoom,
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	stmt := db.getRoomInfoStmt
+	stmt := db.getRoomInfoByNameStmt
 	stmt.BindString(1, roomName)
 	err = sqlitex.StepOnce(stmt, func() {
 		room.randoID = stmt.ReadInt64(0)
@@ -401,6 +401,7 @@ func (db *database) getAttachedRando(randoID, playerID int64) (rando mwproto.Ran
 type room struct {
 	ID      int64
 	Name    string
+	Status  int
 	Players []player
 }
 
@@ -416,10 +417,11 @@ func (db *database) getRoomInfo(randoID int64) (room room, err error) {
 
 	room.ID = randoID
 
-	stmt := db.getRoomNameStmt
+	stmt := db.getRoomInfoByIDStmt
 	stmt.BindInt64(1, randoID)
 	err = sqlitex.StepOnce(stmt, func() {
 		room.Name = stmt.ReadString(0)
+		room.Status = stmt.ReadInt32(1)
 	})
 	if err == sqlitex.ErrZeroRows {
 		err = errRoomNotExist

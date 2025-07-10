@@ -7,11 +7,17 @@
     </head>
     <body>
         <h1>Room {{.Name}}</h1>
-        <p>{{.Players | len}} players:</p>
+        {{if eq .Status 0 }}
         <form action="/shuffle" method="POST">
             <input type="hidden" name="randoID" value="{{.ID}}">
             <input type="submit" value="Shuffle">
         </form>
+        {{else if eq .Status 1}}
+        <p><b>Shuffling...</b></p>
+        {{else}}
+        <p><b>Shuffled!</b></p>
+        {{end}}
+        <p>{{.Players | len}} players:</p>
         <table>
             <tr>
                 <th>Nickname</th>
