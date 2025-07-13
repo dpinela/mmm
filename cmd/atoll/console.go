@@ -20,7 +20,7 @@ var templatePages embed.FS
 
 var templates = template.Must(template.ParseFS(templatePages, "templates/*.html"))
 
-func serveConsole(cfg *serverConfig, db *database) {
+func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 	mux := http.NewServeMux()
 	static, err := fs.Sub(staticPages, "static")
 	if err != nil {
@@ -31,7 +31,7 @@ func serveConsole(cfg *serverConfig, db *database) {
 		createRoom(w, req, db)
 	})
 	mux.HandleFunc("POST /shuffle", func(w http.ResponseWriter, req *http.Request) {
-		shuffleRoom(w, req, db)
+		shuffleRoom(w, req, db, nf)
 	})
 	mux.HandleFunc("GET /rooms/{randoID}", func(w http.ResponseWriter, req *http.Request) {
 		displayRoom(w, req, db)
@@ -78,7 +78,7 @@ func displayRoom(w http.ResponseWriter, req *http.Request, db *database) {
 	}
 }
 
-func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database) {
+func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
 	req.ParseForm()
 	rawRoomID := req.FormValue("randoID")
 	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
@@ -100,6 +100,8 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	nf.notifyShuffleDone(randoID)
+
 	log.Println("rando generated for room", randoID)
 	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", randoID), http.StatusSeeOther)
 }

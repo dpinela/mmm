@@ -40,7 +40,7 @@ func run(workdir string) error {
 		return fmt.Errorf("open DB: %w", err)
 	}
 	nf := newNotifier()
-	go serveConsole(&cfg, db)
+	go serveConsole(&cfg, db, nf)
 	return serve(&cfg, db, nf)
 }
 
@@ -93,7 +93,7 @@ func serveClient(conn *mwproto.ServerConn, db *database, nf *notifier) {
 	var roomInfo joinedRoom
 	// More than one pending notification is redundant anyway. The sending side will drop
 	// redundant ones automatically.
-	itemNotifications := make(chan struct{}, 1)
+	shuffleNotifications := make(chan struct{}, 1)
 
 waitingForReadyOrJoin:
 	for {
@@ -130,9 +130,8 @@ waitingForReadyOrJoin:
 			err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)
 			switch err {
 			case nil:
-				roomInfo.randoID = int64(msg.RandoID)
-				roomInfo.playerID = int64(msg.PlayerID)
-				goto inRando
+				serveClientInGame(conn, db, nf, joinedRoom{randoID: int64(msg.RandoID), playerID: int64(msg.PlayerID)})
+				return
 			case errRoomNotExist, errRoomNotShuffled:
 				log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
 				continue
@@ -147,66 +146,94 @@ waitingForReadyOrJoin:
 
 	log.Printf("room ID = %d; player ID = %d", roomInfo.randoID, roomInfo.playerID)
 
+	// There is a tiny window from db.joinRoom to here where a shuffle notification from
+	// another goroutine would be lost, but the room wasn't shuffled yet when we checked
+	// so we're stuck waiting.
+	// In the very unlikely event this happens, the client can disconnect and reconnect
+	// to resolve the issue.
+	nf.listenShuffleDone(roomInfo.randoID, shuffleNotifications)
+	defer nf.muteShuffleDone(roomInfo.randoID, shuffleNotifications)
+
+	var attachedRando *mwproto.RandoGeneratedMessage
+
 	for {
-		msg, ok := <-conn.Inbox()
-		if !ok {
-			return
-		}
-		switch msg := msg.(type) {
-		case mwproto.RandoGeneratedMessage:
-			switch roomInfo.status {
-			case roomStatusOpen:
-				if err := db.attachRando(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
-					log.Println(err)
-					return
-				}
-			case roomStatusShuffling:
-				log.Printf("room %d, player %d: tried to join with shuffle in progress", roomInfo.randoID, roomInfo.playerID)
-			case roomStatusShuffled:
-				result, err := db.getShuffleResult(roomInfo.randoID, roomInfo.playerID)
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				origSeed, err := db.getAttachedRando(roomInfo.randoID, roomInfo.playerID)
-				if err != nil {
-					log.Println(err)
-					return
-				}
-				log.Println("hash:", result.GeneratedHash)
-				if !reflect.DeepEqual(origSeed, msg) {
-					result.GeneratedHash = "ERROR: seed does not match original"
-				}
-				conn.Send(result)
+		select {
+		case msg, ok := <-conn.Inbox():
+			if !ok {
+				return
 			}
-		case mwproto.DisconnectMessage:
-			log.Printf("connection from %s terminated", conn.RemoteAddr())
-			return
-		case mwproto.UnreadyMessage:
-			goto waitingForReadyOrJoin
-		case mwproto.JoinMessage:
-			log.Printf("%#v", msg)
-			err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)
-			switch err {
-			case nil:
-				roomInfo.randoID = int64(msg.RandoID)
-				roomInfo.playerID = int64(msg.PlayerID)
-				goto inRando
-				// get all pending items
-			case errRoomNotExist, errRoomNotShuffled:
-				log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
-				continue
+			switch msg := msg.(type) {
+			case mwproto.RandoGeneratedMessage:
+				switch roomInfo.status {
+				case roomStatusOpen:
+					if err := db.attachRando(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
+						log.Println(err)
+						return
+					}
+					attachedRando = &msg
+				case roomStatusShuffling:
+					log.Printf("room %d, player %d: tried to join with shuffle in progress", roomInfo.randoID, roomInfo.playerID)
+				case roomStatusShuffled:
+					if err := sendRandoResult(conn, db, roomInfo, msg); err != nil {
+						log.Println(err)
+						return
+					}
+				}
+			case mwproto.DisconnectMessage:
+				log.Printf("connection from %s terminated", conn.RemoteAddr())
+				return
+			case mwproto.UnreadyMessage:
+				goto waitingForReadyOrJoin
+			case mwproto.JoinMessage:
+				log.Printf("%#v", msg)
+				err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)
+				switch err {
+				case nil:
+					serveClientInGame(conn, db, nf, roomInfo)
+					return
+				case errRoomNotExist, errRoomNotShuffled:
+					log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
+					continue
+				default:
+					log.Println(err)
+					return
+				}
 			default:
+				log.Printf("unexpected message (in room) from %s: %#v", conn.RemoteAddr(), msg)
+			}
+		case <-shuffleNotifications:
+			roomInfo.status = roomStatusShuffled
+			if attachedRando == nil {
+				continue
+			}
+			if err := sendRandoResult(conn, db, roomInfo, *attachedRando); err != nil {
 				log.Println(err)
 				return
 			}
-		default:
-			log.Printf("unexpected message (in room) from %s: %#v", conn.RemoteAddr(), msg)
 		}
 	}
+}
 
-inRando:
+func sendRandoResult(conn *mwproto.ServerConn, db *database, roomInfo joinedRoom, currentRando mwproto.RandoGeneratedMessage) error {
+	result, err := db.getShuffleResult(roomInfo.randoID, roomInfo.playerID)
+	if err != nil {
+		return err
+	}
+	origSeed, err := db.getAttachedRando(roomInfo.randoID, roomInfo.playerID)
+	if err != nil {
+		return err
+	}
+	log.Println("hash:", result.GeneratedHash)
+	if !reflect.DeepEqual(origSeed, currentRando) {
+		result.GeneratedHash = "ERROR: seed does not match original"
+	}
+	conn.Send(result)
+	return nil
+}
+
+func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roomInfo joinedRoom) {
 	conn.Send(mwproto.JoinConfirmMessage{})
+	itemNotifications := make(chan struct{}, 1)
 	sid := subscriberID{playerID: roomInfo.playerID, randoID: roomInfo.randoID}
 	nf.listenNewItems(sid, itemNotifications)
 	defer nf.muteNewItems(sid, itemNotifications)
