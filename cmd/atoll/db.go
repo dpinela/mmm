@@ -37,6 +37,11 @@ type database struct {
 	getSentItemsStmt        *sqlite.Statement
 	confirmItemStmt         *sqlite.Statement
 	markItemsAsSavedStmt    *sqlite.Statement
+	hasNotchCostsStmt       *sqlite.Statement
+	markNotchCostsGotStmt   *sqlite.Statement
+	addNotchCostStmt        *sqlite.Statement
+	getNotchCostsStmt       *sqlite.Statement
+	confirmNotchCostsStmt   *sqlite.Statement
 }
 
 func openDB(filename string) (*database, error) {
@@ -54,6 +59,7 @@ func openDB(filename string) (*database, error) {
 		player_id INTEGER NOT NULL CHECK (player_id >= 0),
 		nickname TEXT NOT NULL,
 		rando_seed INTEGER,
+		has_notch_costs INTEGER NOT NULL,
 
 		UNIQUE (rando_id, nickname),
 		PRIMARY KEY (rando_id, player_id)
@@ -108,8 +114,30 @@ func openDB(filename string) (*database, error) {
 		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id),
 		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id)
 	);
-	
+
 	CREATE INDEX IF NOT EXISTS unconfirmed_items_by_recipient ON mw_sent_items (rando_id, destination_player_id);
+
+	CREATE TABLE IF NOT EXISTS mw_notch_costs (
+		rando_id INTEGER NOT NULL,
+		player_id INTEGER NOT NULL,
+		charm INTEGER NOT NULL,
+		cost INTEGER NOT NULL,
+
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+
+		PRIMARY KEY (rando_id, player_id, charm)
+	);
+
+	CREATE TABLE IF NOT EXISTS mw_confirmed_notch_costs (
+		rando_id INTEGER NOT NULL,
+		sender_id INTEGER NOT NULL,
+		destination_player_id INTEGER NOT NULL,
+
+		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id),
+
+		PRIMARY KEY (rando_id, sender_id, destination_player_id)
+	);
 	`
 
 	conn, err := sqlite.Open(filename)
@@ -132,7 +160,7 @@ func openDB(filename string) (*database, error) {
 	db.getRoomInfoByIDStmt = conn.Prepare("SELECT name, status FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
 	db.checkPlayerStmt = conn.Prepare("SELECT player_id FROM mw_players WHERE rando_id = ? AND nickname = ?")
-	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2) RETURNING player_id")
+	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname, has_notch_costs) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2, 0) RETURNING player_id")
 	db.setRandoSeedStmt = conn.Prepare("UPDATE mw_players SET rando_seed = ? WHERE player_id = ?")
 	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE player_id = ?")
 	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (rando_id, player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?, ?)")
@@ -160,6 +188,17 @@ func openDB(filename string) (*database, error) {
 	WHERE msi.rando_id = ? AND msi.destination_player_id = ? AND msi.status < ?`)
 	db.confirmItemStmt = conn.Prepare("UPDATE mw_sent_items SET status = 1 WHERE rando_id = ? AND destination_player_id = ? AND sender_id = ? AND label = ? AND content = ?")
 	db.markItemsAsSavedStmt = conn.Prepare("UPDATE mw_sent_items SET status = 2 WHERE rando_id = ? AND destination_player_id = ? AND status = 1")
+	db.hasNotchCostsStmt = conn.Prepare("SELECT has_notch_costs FROM mw_players WHERE rando_id = ? AND player_id = ?")
+	db.markNotchCostsGotStmt = conn.Prepare("UPDATE mw_players SET has_notch_costs = 1 WHERE rando_id = ? AND player_id = ?")
+	db.addNotchCostStmt = conn.Prepare("INSERT INTO mw_notch_costs (rando_id, player_id, charm, cost) VALUES (?, ?, ?, ?)")
+	db.getNotchCostsStmt = conn.Prepare(`
+	SELECT mnc.player_id, mnc.charm, mnc.cost
+	FROM mw_notch_costs mnc
+	WHERE mnc.rando_id = ? AND NOT EXISTS (
+		SELECT 1 FROM mw_confirmed_notch_costs mcnc
+		WHERE mcnc.rando_id = mnc.rando_id AND mcnc.destination_player_id = ? AND mcnc.sender_id = mnc.player_id
+	)`)
+	db.confirmNotchCostsStmt = conn.Prepare("INSERT INTO mw_confirmed_notch_costs (rando_id, sender_id, destination_player_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
 	return db, nil
 }
 
@@ -575,4 +614,75 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 	hash := hasher.Sum(make([]byte, 0, sha256.Size224))
 	result.GeneratedHash = fmt.Sprintf("%02X", hash[:8])
 	return
+}
+
+func (db *database) hasNotchCosts(randoID, playerID int64) (ok bool, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.hasNotchCostsStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+	err = sqlitex.StepOnce(stmt, func() {
+		ok = stmt.ReadBool(0)
+	})
+	return
+}
+
+func (db *database) saveNotchCosts(randoID, playerID int64, costs map[int]int) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	return sqlitex.Transaction(db.conn, func() error {
+		stmt := db.addNotchCostStmt
+
+		for charm, cost := range costs {
+			stmt.BindInt64(1, randoID)
+			stmt.BindInt64(2, playerID)
+			stmt.BindInt(3, charm)
+			stmt.BindInt(4, cost)
+			if err := sqlitex.Exec(stmt); err != nil {
+				return err
+			}
+		}
+
+		stmt = db.markNotchCostsGotStmt
+		stmt.BindInt64(1, randoID)
+		stmt.BindInt64(2, playerID)
+		return sqlitex.Exec(stmt)
+	})
+}
+
+func (db *database) getUnconfirmedNotchCosts(randoID, playerID int64) (costs map[int64]map[int]int, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.getNotchCostsStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, playerID)
+
+	costs = map[int64]map[int]int{}
+	err = sqlitex.StepAll(stmt, func() {
+		playerID := stmt.ReadInt64(0)
+		charm := stmt.ReadInt32(1)
+		cost := stmt.ReadInt32(2)
+		m, ok := costs[playerID]
+		if !ok {
+			m = map[int]int{}
+			costs[playerID] = m
+		}
+		m[charm] = cost
+	})
+	return
+}
+
+func (db *database) confirmNotchCosts(randoID, playerID, senderID int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.confirmNotchCostsStmt
+	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(2, senderID)
+	stmt.BindInt64(3, playerID)
+	return sqlitex.Exec(stmt)
 }

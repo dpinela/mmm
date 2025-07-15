@@ -151,8 +151,8 @@ waitingForReadyOrJoin:
 	// so we're stuck waiting.
 	// In the very unlikely event this happens, the client can disconnect and reconnect
 	// to resolve the issue.
-	nf.listenShuffleDone(roomInfo.randoID, shuffleNotifications)
-	defer nf.muteShuffleDone(roomInfo.randoID, shuffleNotifications)
+	nf.shuffleTopic.Listen(roomInfo.randoID, shuffleNotifications)
+	defer nf.shuffleTopic.Mute(roomInfo.randoID, shuffleNotifications)
 
 	var attachedRando *mwproto.RandoGeneratedMessage
 
@@ -233,10 +233,11 @@ func sendRandoResult(conn *mwproto.ServerConn, db *database, roomInfo joinedRoom
 
 func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roomInfo joinedRoom) {
 	conn.Send(mwproto.JoinConfirmMessage{})
+
 	itemNotifications := make(chan struct{}, 1)
 	sid := subscriberID{playerID: roomInfo.playerID, randoID: roomInfo.randoID}
-	nf.listenNewItems(sid, itemNotifications)
-	defer nf.muteNewItems(sid, itemNotifications)
+	nf.itemTopic.Listen(sid, itemNotifications)
+	defer nf.itemTopic.Mute(sid, itemNotifications)
 
 	pendingItems, err := db.getUnsavedItems(roomInfo.randoID, roomInfo.playerID)
 	if err != nil {
@@ -250,6 +251,24 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 		conn.Send(item)
 	}
 
+	gotNotchCosts, err := db.hasNotchCosts(roomInfo.randoID, roomInfo.playerID)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	if !gotNotchCosts {
+		conn.Send(mwproto.RequestCharmNotchCostsMessage{})
+	}
+
+	othersCosts, err := db.getUnconfirmedNotchCosts(roomInfo.randoID, roomInfo.playerID)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	for playerID, costs := range othersCosts {
+		conn.Send(mwproto.AnnounceCharmNotchCostsMessage{PlayerID: int32(playerID), NotchCosts: costs})
+	}
+
 	for {
 		select {
 		case msg, ok := <-conn.Inbox():
@@ -257,13 +276,31 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 				return
 			}
 			switch msg := msg.(type) {
+			case mwproto.AnnounceCharmNotchCostsMessage:
+				if gotNotchCosts {
+					log.Printf("received duplicate notch costs for rando %d, player %d; ignoring", roomInfo.randoID, roomInfo.playerID)
+					continue
+				}
+				if int64(msg.PlayerID) != roomInfo.playerID {
+					log.Printf("rando %d, player %d sent notch costs for a different player (%d); ignoring", roomInfo.randoID, roomInfo.playerID, msg.PlayerID)
+					continue
+				}
+				if err := db.saveNotchCosts(roomInfo.randoID, roomInfo.playerID, msg.NotchCosts); err != nil {
+					log.Println(err)
+					continue
+				}
+			case mwproto.ConfirmCharmNotchCostsReceived:
+				if err := db.confirmNotchCosts(roomInfo.randoID, roomInfo.playerID, int64(msg.PlayerID)); err != nil {
+					log.Println(err)
+					continue
+				}
 			case mwproto.DataSendMessage:
 				if err := db.sendItem(roomInfo.randoID, roomInfo.playerID, int64(msg.To), msg.Label, msg.Content); err != nil {
 					log.Println(err)
 					return
 				}
 				conn.Send(mwproto.DataSendConfirmMessage{Label: msg.Label, Content: msg.Content, To: msg.To})
-				nf.notifyNewItems(subscriberID{randoID: roomInfo.randoID, playerID: int64(msg.To)})
+				nf.itemTopic.Notify(subscriberID{randoID: roomInfo.randoID, playerID: int64(msg.To)})
 			case mwproto.DataReceiveConfirmMessage:
 				if err := db.confirmItem(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
 					log.Println(err)

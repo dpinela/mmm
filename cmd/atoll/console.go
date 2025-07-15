@@ -100,7 +100,7 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *not
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	nf.notifyShuffleDone(randoID)
+	nf.shuffleTopic.Notify(randoID)
 
 	log.Println("rando generated for room", randoID)
 	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", randoID), http.StatusSeeOther)
