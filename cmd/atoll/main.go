@@ -311,6 +311,19 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 				}
 				conn.Send(mwproto.DataSendConfirmMessage{Label: msg.Label, Content: msg.Content, To: msg.To})
 				nf.itemTopic.Notify(subscriberID{randoID: roomInfo.randoID, playerID: int64(msg.To)})
+			case mwproto.DatasSendMessage:
+				if err := db.sendItems(roomInfo.randoID, roomInfo.playerID, msg.Datas); err != nil {
+					log.Println(err)
+					return
+				}
+				conn.Send(mwproto.DatasSendConfirmMessage{DatasCount: int32(len(msg.Datas))})
+				destinationPlayers := map[int32]struct{}{}
+				for _, item := range msg.Datas {
+					destinationPlayers[item.To] = struct{}{}
+				}
+				for p := range destinationPlayers {
+					nf.itemTopic.Notify(subscriberID{randoID: roomInfo.randoID, playerID: int64(p)})
+				}
 			case mwproto.DataReceiveConfirmMessage:
 				if err := db.confirmItem(roomInfo.randoID, roomInfo.playerID, msg); err != nil {
 					log.Println(err)

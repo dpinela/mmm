@@ -250,6 +250,28 @@ func (DataSendConfirmMessage) msgType() messageType {
 	return typeDataSendConfirm
 }
 
+type DatasSendMessage struct {
+	Datas []Item
+}
+
+type Item struct {
+	Label   string `json:"Item1"`
+	Content string `json:"Item2"`
+	To      int32  `json:"Item3"`
+}
+
+func (DatasSendMessage) msgType() messageType {
+	return typeDatasSend
+}
+
+type DatasSendConfirmMessage struct {
+	DatasCount int32
+}
+
+func (DatasSendConfirmMessage) msgType() messageType {
+	return typeDatasSendConfirm
+}
+
 type RequestCharmNotchCostsMessage struct{}
 
 func (RequestCharmNotchCostsMessage) msgType() messageType {

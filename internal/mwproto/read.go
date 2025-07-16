@@ -63,6 +63,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[DataReceiveMessage](payload)
 	case typeDataReceiveConfirm:
 		return unmarshal[DataReceiveConfirmMessage](payload)
+	case typeDatasSend:
+		return unmarshal[DatasSendMessage](payload)
 	case typeDatasReceive:
 		return unmarshal[DatasReceiveMessage](payload)
 	case typeDataSend:

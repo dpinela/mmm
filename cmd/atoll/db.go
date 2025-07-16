@@ -298,6 +298,26 @@ func (db *database) sendItem(randoID, selfID, destinationID int64, label, conten
 	return sqlitex.Exec(stmt)
 }
 
+func (db *database) sendItems(randoID, selfID int64, items []mwproto.Item) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	return sqlitex.Transaction(db.conn, func() error {
+		stmt := db.sendItemStmt
+		for _, item := range items {
+			stmt.BindInt64(1, randoID)
+			stmt.BindInt64(2, selfID)
+			stmt.BindInt(3, int(item.To))
+			stmt.BindString(4, item.Label)
+			stmt.BindString(5, item.Content)
+			if err := sqlitex.Exec(stmt); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (db *database) getItemsWithStatusBelow(randoID, playerID int64, status int) (items []mwproto.DataReceiveMessage, err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
