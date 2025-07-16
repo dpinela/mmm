@@ -265,11 +265,11 @@ func (AnnounceCharmNotchCostsMessage) msgType() messageType {
 	return typeAnnounceCharmNotchCosts
 }
 
-type ConfirmCharmNotchCostsReceived struct {
+type ConfirmCharmNotchCostsReceivedMessage struct {
 	PlayerID int32
 }
 
-func (ConfirmCharmNotchCostsReceived) msgType() messageType {
+func (ConfirmCharmNotchCostsReceivedMessage) msgType() messageType {
 	return typeConfirmCharmNotchCostsReceived
 }
 

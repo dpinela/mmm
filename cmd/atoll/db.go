@@ -191,12 +191,14 @@ func openDB(filename string) (*database, error) {
 	db.hasNotchCostsStmt = conn.Prepare("SELECT has_notch_costs FROM mw_players WHERE rando_id = ? AND player_id = ?")
 	db.markNotchCostsGotStmt = conn.Prepare("UPDATE mw_players SET has_notch_costs = 1 WHERE rando_id = ? AND player_id = ?")
 	db.addNotchCostStmt = conn.Prepare("INSERT INTO mw_notch_costs (rando_id, player_id, charm, cost) VALUES (?, ?, ?, ?)")
+	// Left join necessary because the player may have submitted an empty notch cost map.
 	db.getNotchCostsStmt = conn.Prepare(`
-	SELECT mnc.player_id, mnc.charm, mnc.cost
-	FROM mw_notch_costs mnc
-	WHERE mnc.rando_id = ? AND NOT EXISTS (
+	SELECT mp.player_id, mnc.charm, mnc.cost
+	FROM mw_players mp
+		LEFT JOIN mw_notch_costs mnc ON mp.rando_id = mnc.rando_id AND mp.player_id = mnc.player_id
+	WHERE mp.rando_id = ?1 AND mp.player_id != ?2 AND mp.has_notch_costs AND NOT EXISTS (
 		SELECT 1 FROM mw_confirmed_notch_costs mcnc
-		WHERE mcnc.rando_id = mnc.rando_id AND mcnc.destination_player_id = ? AND mcnc.sender_id = mnc.player_id
+		WHERE mcnc.rando_id = mp.rando_id AND mcnc.destination_player_id = ?2 AND mcnc.sender_id = mp.player_id
 	)`)
 	db.confirmNotchCostsStmt = conn.Prepare("INSERT INTO mw_confirmed_notch_costs (rando_id, sender_id, destination_player_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING")
 	return db, nil
@@ -671,7 +673,9 @@ func (db *database) getUnconfirmedNotchCosts(randoID, playerID int64) (costs map
 			m = map[int]int{}
 			costs[playerID] = m
 		}
-		m[charm] = cost
+		if !stmt.IsNull(1) {
+			m[charm] = cost
+		}
 	})
 	return
 }

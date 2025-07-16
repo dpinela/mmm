@@ -74,7 +74,7 @@ func Read(r io.Reader) (Message, error) {
 	case typeRequestCharmNotchCosts:
 		return RequestCharmNotchCostsMessage{}, nil
 	case typeConfirmCharmNotchCostsReceived:
-		return ConfirmCharmNotchCostsReceived{}, nil
+		return unmarshal[ConfirmCharmNotchCostsReceivedMessage](payload)
 	default:
 		return nil, fmt.Errorf("read message: unknown message type: %d", msgType)
 	}

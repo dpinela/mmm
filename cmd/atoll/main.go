@@ -239,6 +239,10 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 	nf.itemTopic.Listen(sid, itemNotifications)
 	defer nf.itemTopic.Mute(sid, itemNotifications)
 
+	notchCostNotifications := make(chan struct{}, 1)
+	nf.notchCostTopic.Listen(roomInfo.randoID, notchCostNotifications)
+	defer nf.notchCostTopic.Mute(roomInfo.randoID, notchCostNotifications)
+
 	pendingItems, err := db.getUnsavedItems(roomInfo.randoID, roomInfo.playerID)
 	if err != nil {
 		log.Println(err)
@@ -266,6 +270,7 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 		return
 	}
 	for playerID, costs := range othersCosts {
+		log.Printf("rando %d, player %d: sending notch costs of player %d", roomInfo.randoID, roomInfo.playerID, playerID)
 		conn.Send(mwproto.AnnounceCharmNotchCostsMessage{PlayerID: int32(playerID), NotchCosts: costs})
 	}
 
@@ -289,7 +294,12 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 					log.Println(err)
 					continue
 				}
-			case mwproto.ConfirmCharmNotchCostsReceived:
+				log.Printf("received notch costs for rando %d, player %d", roomInfo.randoID, roomInfo.playerID)
+				// This notification will echo back to this goroutine as well, but that's harmless.
+				// (except it may cause a notch cost announcement to get duplicated)
+				nf.notchCostTopic.Notify(roomInfo.randoID)
+			case mwproto.ConfirmCharmNotchCostsReceivedMessage:
+				log.Printf("rando %d, player %d confirmed notch costs of player %d", roomInfo.randoID, roomInfo.playerID, msg.PlayerID)
 				if err := db.confirmNotchCosts(roomInfo.randoID, roomInfo.playerID, int64(msg.PlayerID)); err != nil {
 					log.Println(err)
 					continue
@@ -322,6 +332,16 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 			}
 			for _, item := range items {
 				conn.Send(item)
+			}
+		case <-notchCostNotifications:
+			othersCosts, err := db.getUnconfirmedNotchCosts(roomInfo.randoID, roomInfo.playerID)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			for playerID, costs := range othersCosts {
+				log.Printf("rando %d, player %d: sending notch costs of player %d", roomInfo.randoID, roomInfo.playerID, playerID)
+				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{PlayerID: int32(playerID), NotchCosts: costs})
 			}
 		}
 	}

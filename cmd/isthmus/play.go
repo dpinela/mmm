@@ -329,7 +329,7 @@ mainMessageLoop:
 				for charm := range slices.Sorted(maps.Keys(msg.NotchCosts)) {
 					log.Println("charm", charm, "costs", msg.NotchCosts[charm], "notches")
 				}
-				conn.Send(mwproto.ConfirmCharmNotchCostsReceived{
+				conn.Send(mwproto.ConfirmCharmNotchCostsReceivedMessage{
 					PlayerID: msg.PlayerID,
 				})
 			}
