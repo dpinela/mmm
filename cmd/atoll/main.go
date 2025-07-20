@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	"github.com/dpinela/mmm/internal/mwproto"
 )
@@ -243,6 +244,10 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 	nf.notchCostTopic.Listen(roomInfo.randoID, notchCostNotifications)
 	defer nf.notchCostTopic.Mute(roomInfo.randoID, notchCostNotifications)
 
+	const resetPeriod = 5 * time.Second
+
+	resendTimer := time.NewTicker(resetPeriod)
+
 	pendingItems, err := db.getUnsavedItems(roomInfo.randoID, roomInfo.playerID)
 	if err != nil {
 		log.Println(err)
@@ -338,11 +343,22 @@ func serveClientInGame(conn *mwproto.ServerConn, db *database, nf *notifier, roo
 				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return
 			}
+		case <-resendTimer.C:
+			items, err := db.getUnconfirmedItems(roomInfo.randoID, roomInfo.playerID)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			for _, item := range items {
+				conn.Send(item)
+			}
 		case <-itemNotifications:
 			items, err := db.getUnconfirmedItems(roomInfo.randoID, roomInfo.playerID)
 			if err != nil {
+				log.Println(err)
 				return
 			}
+			resendTimer.Reset(resetPeriod)
 			for _, item := range items {
 				conn.Send(item)
 			}
