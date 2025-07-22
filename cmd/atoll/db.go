@@ -55,7 +55,7 @@ func openDB(filename string) (*database, error) {
 	);
 	
 	CREATE TABLE IF NOT EXISTS mw_players (
-		rando_id INTEGER NOT NULL REFERENCES mw_rooms (id),
+		rando_id INTEGER NOT NULL REFERENCES mw_rooms (id) ON DELETE CASCADE,
 		player_id INTEGER NOT NULL CHECK (player_id >= 0),
 		nickname TEXT NOT NULL,
 		rando_seed INTEGER,
@@ -73,7 +73,7 @@ func openDB(filename string) (*database, error) {
 		item_name TEXT NOT NULL,
 		location_name TEXT NOT NULL,
 
-		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
 
 		PRIMARY KEY (rando_id, player_id, group_name, index_)
 	);
@@ -85,7 +85,7 @@ func openDB(filename string) (*database, error) {
 		key TEXT NOT NULL,
 		value TEXT NOT NULL,
 
-		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
 
 		PRIMARY KEY (rando_id, player_id, index_)
 	);
@@ -99,8 +99,8 @@ func openDB(filename string) (*database, error) {
 		location_name TEXT NOT NULL,
 		location_index INTEGER NOT NULL,
 
-		FOREIGN KEY (rando_id, item_player_id) REFERENCES mw_players (rando_id, player_id),
-		FOREIGN KEY (rando_id, location_player_id) REFERENCES mw_players (rando_id, player_id)
+		FOREIGN KEY (rando_id, item_player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
+		FOREIGN KEY (rando_id, location_player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE
 	);
 	
 	CREATE TABLE IF NOT EXISTS mw_sent_items (
@@ -111,8 +111,8 @@ func openDB(filename string) (*database, error) {
 		content TEXT NOT NULL,
 		status INTEGER NOT NULL,
 
-		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id),
-		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id)
+		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
+		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE
 	);
 
 	CREATE INDEX IF NOT EXISTS unconfirmed_items_by_recipient ON mw_sent_items (rando_id, destination_player_id);
@@ -123,7 +123,7 @@ func openDB(filename string) (*database, error) {
 		charm INTEGER NOT NULL,
 		cost INTEGER NOT NULL,
 
-		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
 
 		PRIMARY KEY (rando_id, player_id, charm)
 	);
@@ -133,8 +133,8 @@ func openDB(filename string) (*database, error) {
 		sender_id INTEGER NOT NULL,
 		destination_player_id INTEGER NOT NULL,
 
-		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id),
-		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id),
+		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
+		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
 
 		PRIMARY KEY (rando_id, sender_id, destination_player_id)
 	);

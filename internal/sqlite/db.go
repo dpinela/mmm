@@ -98,10 +98,19 @@ func (s *Statement) BindInt64(param int, value int64) {
 }
 
 func (s *Statement) BindString(param int, value string) {
+	// Ensure that the pointer passed to sqlite_bind_text is not null; a null pointer
+	// would be interpreted as binding a NULL instead of the empty string.
+	if len(value) == 0 {
+		value = "$"[:0]
+	}
 	must(C.sqlite3_bind_text(s.stmt, C.int(param), cPointer(value), C.int(len(value)), C.SQLITE_TRANSIENT))
 }
 
 func (s *Statement) BindBytes(param int, value []byte) {
+	// Same as in BindString.
+	if len(value) == 0 {
+		value = make([]byte, 0, 1)
+	}
 	must(C.sqlite3_bind_text(s.stmt, C.int(param), (*C.char)(unsafe.Pointer(unsafe.SliceData(value))), C.int(len(value)), C.SQLITE_TRANSIENT))
 }
 
@@ -177,6 +186,10 @@ func (s *Statement) Close() {
 }
 
 func cPointer(s string) *C.char {
+	if s == "" {
+		// Ensure that the pointer 
+		s = "w"[:0]
+	}
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
 
