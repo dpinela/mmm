@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 
 	"github.com/dpinela/mmm/internal/mwproto"
@@ -607,11 +609,16 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 		return
 	}
 
-	hasher := sha256.New224()
+	var (
+		hasher                = sha256.New224()
+		mainSpoilerBuilder    strings.Builder
+		playerSpoilerBuilders = make([]strings.Builder, len(result.Nicknames))
+		spoilerWriter         = io.MultiWriter(hasher, &mainSpoilerBuilder)
+	)
 
 	result.Placements = map[string][]mwproto.ResultPlacement{}
 	result.PlayerItemsPlacements = map[string]string{}
-	result.ItemsSpoiler.IndividualWorldSpoilers = map[string]string{}
+
 	// We need all these slices to be non-nil so that they will be non-null in the JSON
 	// encoding.
 	result.ReadyMetadata = make([][]mwproto.KeyValuePair, len(result.Nicknames))
@@ -639,12 +646,20 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 			result.PlayerItemsPlacements[itemName] = mwproto.QualifyName(int32(locationPID), locationName)
 		}
 
-		fmt.Fprintf(hasher, "%d,%s,%d,%s", itemPID, itemName, locationPID, locationName)
+		fmt.Fprintf(spoilerWriter, "%s's %s @ %s's %s\n", result.Nicknames[itemPID], itemName, result.Nicknames[locationPID], locationName)
+		fmt.Fprintf(&playerSpoilerBuilders[locationPID], "%s's %s @ %s\n", result.Nicknames[itemPID], itemName, locationName)
 	})
 	if err != nil {
 		return
 	}
 
+	result.ItemsSpoiler.FullOrderedItemsLog = mainSpoilerBuilder.String()
+	result.ItemsSpoiler.IndividualWorldSpoilers = make(map[string]string, len(result.Nicknames))
+	for i, name := range result.Nicknames {
+		result.ItemsSpoiler.IndividualWorldSpoilers[name] = playerSpoilerBuilders[i].String()
+	}
+
+	// this will be a hash of the spoiler log
 	hash := hasher.Sum(make([]byte, 0, sha256.Size224))
 	result.GeneratedHash = fmt.Sprintf("%02X", hash[:8])
 	return
