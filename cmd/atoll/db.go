@@ -157,7 +157,7 @@ func openDB(filename string) (*database, error) {
 	SELECT mr.status FROM mw_players mp JOIN mw_rooms mr ON mp.rando_id = mr.id
 	WHERE mp.rando_id = ? AND mp.player_id = ?`)
 	db.getRoomInfoByNameStmt = conn.Prepare("SELECT id, status FROM mw_rooms WHERE name = ?")
-	db.getRoomInfoByIDStmt = conn.Prepare("SELECT name, status FROM mw_rooms WHERE id = ?")
+	db.getRoomInfoByIDStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
 	db.checkPlayerStmt = conn.Prepare("SELECT player_id FROM mw_players WHERE rando_id = ? AND nickname = ?")
 	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname, has_notch_costs) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2, 0) RETURNING player_id")
@@ -472,16 +472,28 @@ type player struct {
 	HasSeed  bool
 }
 
-func (db *database) getRoomInfo(randoID int64) (room room, err error) {
+func (db *database) getRoomName(id int64) (name string, err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	room.ID = randoID
-
 	stmt := db.getRoomInfoByIDStmt
-	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(1, id)
 	err = sqlitex.StepOnce(stmt, func() {
-		room.Name = stmt.ReadString(0)
+		name = stmt.ReadString(0)
+	})
+	return
+}
+
+func (db *database) getRoomInfo(name string) (room room, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	room.Name = name
+
+	stmt := db.getRoomInfoByNameStmt
+	stmt.BindString(1, name)
+	err = sqlitex.StepOnce(stmt, func() {
+		room.ID = stmt.ReadInt64(0)
 		room.Status = stmt.ReadInt32(1)
 	})
 	if err == sqlitex.ErrZeroRows {
@@ -490,7 +502,7 @@ func (db *database) getRoomInfo(randoID int64) (room room, err error) {
 	}
 
 	stmt = db.listRoomPlayersStmt
-	stmt.BindInt64(1, randoID)
+	stmt.BindInt64(1, room.ID)
 
 	err = sqlitex.StepAll(stmt, func() {
 		room.Players = append(room.Players, player{

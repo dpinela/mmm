@@ -186,10 +186,6 @@ func (s *Statement) Close() {
 }
 
 func cPointer(s string) *C.char {
-	if s == "" {
-		// Ensure that the pointer 
-		s = "w"[:0]
-	}
 	return (*C.char)(unsafe.Pointer(unsafe.StringData(s)))
 }
 

@@ -2,7 +2,6 @@ package main
 
 import (
 	"embed"
-	"fmt"
 	"html/template"
 	"io/fs"
 	"log"
@@ -33,7 +32,7 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 	mux.HandleFunc("POST /shuffle", func(w http.ResponseWriter, req *http.Request) {
 		shuffleRoom(w, req, db, nf)
 	})
-	mux.HandleFunc("GET /rooms/{randoID}", func(w http.ResponseWriter, req *http.Request) {
+	mux.HandleFunc("GET /rooms/{randoName}", func(w http.ResponseWriter, req *http.Request) {
 		displayRoom(w, req, db)
 	})
 	err = http.ListenAndServe(cfg.ListenAddress+":"+cfg.ConsolePort, mux)
@@ -43,32 +42,39 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 }
 
 func createRoom(w http.ResponseWriter, req *http.Request, db *database) {
-	if err := req.ParseForm(); err != nil {
+	const (
+		nameEntropy = 10
+		maxRetries  = 100
+	)
+	var (
+		id   int64
+		err  error
+		name string
+	)
+	for range maxRetries {
+		name = generateRoomName(nameEntropy)
+		id, err = db.createRoom(name)
+		if err == sqlite.ErrConstraintUnique {
+			continue
+		}
+		if err == nil {
+			break
+		}
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	name := req.PostForm.Get("name")
-	id, err := db.createRoom(name)
-	if err == sqlite.ErrConstraintUnique {
-		http.Redirect(w, req, "/room-already-exists.html", http.StatusSeeOther)
-		return
-	}
+	// If this happens, we ran out of attempts.
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		http.Redirect(w, req, "/too-many-rooms.html", http.StatusSeeOther)
 		return
 	}
 	log.Printf("created room %q with ID %d", name, id)
-	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", id), http.StatusSeeOther)
+	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }
 
 func displayRoom(w http.ResponseWriter, req *http.Request, db *database) {
-	rawRoomID := req.PathValue("randoID")
-	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-	info, err := db.getRoomInfo(randoID)
+	roomName := req.PathValue("randoName")
+	info, err := db.getRoomInfo(roomName)
 	if err == errRoomNotExist {
 		http.NotFound(w, req)
 		return
@@ -86,6 +92,7 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *not
 		http.NotFound(w, req)
 		return
 	}
+
 	if err := db.lockRoom(randoID); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -103,5 +110,12 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *not
 	nf.shuffleTopic.Notify(randoID)
 
 	log.Println("rando generated for room", randoID)
-	http.Redirect(w, req, fmt.Sprintf("/rooms/%d", randoID), http.StatusSeeOther)
+
+	name, err := db.getRoomName(randoID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }
