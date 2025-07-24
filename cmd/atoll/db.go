@@ -113,6 +113,8 @@ func openDB(filename string) (*database, error) {
 		content TEXT NOT NULL,
 		status INTEGER NOT NULL,
 
+		PRIMARY KEY (rando_id, sender_id, destination_player_id, label, content),
+
 		FOREIGN KEY (rando_id, sender_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE,
 		FOREIGN KEY (rando_id, destination_player_id) REFERENCES mw_players (rando_id, player_id) ON DELETE CASCADE
 	);
@@ -182,7 +184,7 @@ func openDB(filename string) (*database, error) {
 	SELECT group_name, item_player_id, item_name, location_player_id, location_name
 	FROM mw_result_placements WHERE rando_id = ?
 	ORDER BY location_player_id, location_index`)
-	db.sendItemStmt = conn.Prepare("INSERT INTO mw_sent_items (rando_id, sender_id, destination_player_id, label, content, status) VALUES (?, ?, ?, ?, ?, 0)")
+	db.sendItemStmt = conn.Prepare("INSERT INTO mw_sent_items (rando_id, sender_id, destination_player_id, label, content, status) VALUES (?, ?, ?, ?, ?, 0) ON CONFLICT DO NOTHING")
 	db.getSentItemsStmt = conn.Prepare(`
 	SELECT msi.sender_id, mp.nickname, msi.label, msi.content
 	FROM mw_sent_items msi
