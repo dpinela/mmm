@@ -35,6 +35,9 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 	mux.HandleFunc("GET /rooms/{randoName}", func(w http.ResponseWriter, req *http.Request) {
 		displayRoom(w, req, db)
 	})
+	mux.HandleFunc("POST /unjoin-player", func(w http.ResponseWriter, req *http.Request) {
+		unjoinPlayer(w, req, db)
+	})
 	err = http.ListenAndServe(cfg.ListenAddress+":"+cfg.ConsolePort, mux)
 	if err != nil {
 		log.Println(err)
@@ -117,5 +120,45 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *not
 		return
 	}
 
+	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
+}
+
+func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database) {
+	if err := req.ParseForm(); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	rawRoomID := req.FormValue("randoID")
+	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+
+	rawPlayerID := req.FormValue("playerID")
+	playerID, err := strconv.ParseInt(rawPlayerID, 10, 64)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+
+	name, err := db.getRoomName(randoID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	err = db.unjoinRoom(randoID, playerID)
+	if err == errRoomNotOpen {
+		if err := templates.ExecuteTemplate(w, "room-already-shuffled.html", name); err != nil {
+			log.Println(err)
+		}
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+	}
+	log.Printf("room %d, player %d deleted", randoID, playerID)
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }

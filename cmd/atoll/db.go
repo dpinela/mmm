@@ -16,16 +16,17 @@ import (
 type database struct {
 	mu                      sync.Mutex
 	conn                    *sqlite.DB
-	beginStmt               *sqlite.Statement
-	commitStmt              *sqlite.Statement
-	rollbackStmt            *sqlite.Statement
 	checkRoomJoinableStmt   *sqlite.Statement
 	getRoomInfoByNameStmt   *sqlite.Statement
-	getRoomInfoByIDStmt     *sqlite.Statement
+	getRoomNameByIDStmt     *sqlite.Statement
+	getRoomStatusByIDStmt   *sqlite.Statement
 	createRoomStmt          *sqlite.Statement
 	listRoomPlayersStmt     *sqlite.Statement
 	checkPlayerStmt         *sqlite.Statement
 	addPlayerStmt           *sqlite.Statement
+	deletePlayerStmt        *sqlite.Statement
+	renumberPlayersStmt     *sqlite.Statement
+	renumberPlacementsStmt  *sqlite.Statement
 	setRandoSeedStmt        *sqlite.Statement
 	deleteAllPlacementsStmt *sqlite.Statement
 	addPlacementStmt        *sqlite.Statement
@@ -154,19 +155,20 @@ func openDB(filename string) (*database, error) {
 		return nil, err
 	}
 	db := &database{conn: conn}
-	db.beginStmt = conn.Prepare("BEGIN")
-	db.commitStmt = conn.Prepare("COMMIT")
-	db.rollbackStmt = conn.Prepare("ROLLBACK")
 	db.checkRoomJoinableStmt = conn.Prepare(`
 	SELECT mr.status FROM mw_players mp JOIN mw_rooms mr ON mp.rando_id = mr.id
 	WHERE mp.rando_id = ? AND mp.player_id = ?`)
 	db.getRoomInfoByNameStmt = conn.Prepare("SELECT id, status FROM mw_rooms WHERE name = ?")
-	db.getRoomInfoByIDStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
+	db.getRoomNameByIDStmt = conn.Prepare("SELECT name FROM mw_rooms WHERE id = ?")
+	db.getRoomStatusByIDStmt = conn.Prepare("SELECT status FROM mw_rooms WHERE id = ?")
 	db.createRoomStmt = conn.Prepare("INSERT INTO mw_rooms (name, status) VALUES (?, 0) RETURNING id")
 	db.checkPlayerStmt = conn.Prepare("SELECT player_id FROM mw_players WHERE rando_id = ? AND nickname = ?")
 	db.addPlayerStmt = conn.Prepare("INSERT INTO mw_players (rando_id, player_id, nickname, has_notch_costs) VALUES (?1, (SELECT COUNT(*) FROM mw_players WHERE rando_id = ?1), ?2, 0) RETURNING player_id")
+	db.deletePlayerStmt = conn.Prepare("DELETE FROM mw_players WHERE rando_id = ? AND player_id = ?")
+	db.renumberPlayersStmt = conn.Prepare("UPDATE mw_players SET player_id = player_id - 1 WHERE rando_id = ? AND player_id > ?")
+	db.renumberPlacementsStmt = conn.Prepare("UPDATE mw_player_placements SET player_id = player_id - 1 WHERE rando_id = ? AND player_id > ?")
 	db.setRandoSeedStmt = conn.Prepare("UPDATE mw_players SET rando_seed = ? WHERE player_id = ?")
-	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE player_id = ?")
+	db.deleteAllPlacementsStmt = conn.Prepare("DELETE FROM mw_player_placements WHERE rando_id = ? AND player_id = ?")
 	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (rando_id, player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?, ?)")
 	db.getPlayerSeedStmt = conn.Prepare("SELECT rando_seed FROM mw_players WHERE rando_id = ? AND player_id = ?")
 	db.getPlayerPlacementsStmt = conn.Prepare("SELECT group_name, item_name, location_name FROM mw_player_placements WHERE rando_id = ? AND player_id = ? ORDER BY index_")
@@ -211,6 +213,7 @@ func openDB(filename string) (*database, error) {
 var (
 	errRoomNotExist    = errors.New("room does not exist")
 	errRoomNotShuffled = errors.New("room is not yet shuffled")
+	errRoomNotOpen     = errors.New("room is already being shuffled")
 )
 
 const (
@@ -266,6 +269,51 @@ func (db *database) joinRoom(roomName string, nickname string) (room joinedRoom,
 		room.playerID = stmt.ReadInt64(0)
 	})
 	return
+}
+
+func (db *database) unjoinRoom(randoID int64, playerID int64) error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	var status int
+	stmt := db.getRoomStatusByIDStmt
+	stmt.BindInt(1, int(randoID))
+	err := sqlitex.StepOnce(stmt, func() {
+		status = stmt.ReadInt32(0)
+	})
+	if err != nil {
+		return err
+	}
+	if status != roomStatusOpen {
+		return errRoomNotOpen
+	}
+
+	return sqlitex.Transaction(db.conn, func() error {
+		// SQLite doesn't guarantee whether pragmas execute at preparation time or step time,
+		// so we may as well just Exec it.
+		if err := db.conn.Exec("PRAGMA defer_foreign_keys = ON"); err != nil {
+			return err
+		}
+
+		stmt := db.deletePlayerStmt
+		stmt.BindInt(1, int(randoID))
+		stmt.BindInt(2, int(playerID))
+		if err := sqlitex.Exec(stmt); err != nil {
+			return err
+		}
+
+		stmt = db.renumberPlayersStmt
+		stmt.BindInt(1, int(randoID))
+		stmt.BindInt(2, int(playerID))
+		if err := sqlitex.Exec(stmt); err != nil {
+			return err
+		}
+
+		stmt = db.renumberPlacementsStmt
+		stmt.BindInt(1, int(randoID))
+		stmt.BindInt(2, int(playerID))
+		return sqlitex.Exec(stmt)
+	})
 }
 
 func (db *database) joinShuffledRoom(randoID int32, playerID int32) error {
@@ -410,7 +458,8 @@ func (db *database) attachRando(randoID int64, playerID int64, rando mwproto.Ran
 		}
 
 		stmt = db.deleteAllPlacementsStmt
-		stmt.BindInt64(1, playerID)
+		stmt.BindInt64(1, randoID)
+		stmt.BindInt64(2, playerID)
 		if err := sqlitex.Exec(stmt); err != nil {
 			return err
 		}
@@ -480,7 +529,7 @@ func (db *database) getRoomName(id int64) (name string, err error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	stmt := db.getRoomInfoByIDStmt
+	stmt := db.getRoomNameByIDStmt
 	stmt.BindInt64(1, id)
 	err = sqlitex.StepOnce(stmt, func() {
 		name = stmt.ReadString(0)

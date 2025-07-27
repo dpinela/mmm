@@ -3,3 +3,11 @@ body {
     margin: auto;
     width: fit-content;
 }
+
+input[name=yousure] ~ input[type=submit] {
+    display: none;
+}
+
+input[name=yousure]:checked ~ input[type=submit] {
+    display: inline;
+}

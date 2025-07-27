@@ -7,12 +7,14 @@
     </head>
     <body>
         <h1>Room {{.Name}}</h1>
-        {{if eq .Status 0 }}
+        {{$status := .Status}}
+        {{$randoID := .ID}}
+        {{if eq $status 0 }}
         <form action="/shuffle" method="POST">
-            <input type="hidden" name="randoID" value="{{.ID}}">
+            <input type="hidden" name="randoID" value="{{$randoID}}">
             <input type="submit" value="Shuffle">
         </form>
-        {{else if eq .Status 1}}
+        {{else if eq $status 1}}
         <p><b>Shuffling...</b></p>
         {{else}}
         <p><b>Shuffled!</b></p>
@@ -22,11 +24,24 @@
             <tr>
                 <th>Nickname</th>
                 <th>Ready</th>
+                {{if eq $status 0}}
+                    <th>Actions</th>
+                {{end}}
             </tr>
             {{range .Players}}
                 <tr>
                     <td>{{.Nickname}}</td>
                     <td>{{if .HasSeed}} ✔️ {{else}} × {{end}}</td>
+                    {{if eq $status 0}}
+                        <td>
+                            <form action="/unjoin-player" method="POST">
+                                <input type="checkbox" name="yousure">
+                                <input type="hidden" name="randoID" value="{{$randoID}}">
+                                <input type="hidden" name="playerID" value="{{.ID}}">
+                                <input type="submit" value="Delete">
+                            </form>
+                        </td>
+                    {{end}}
                 </tr>
             {{end}}
         </table>
