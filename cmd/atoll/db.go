@@ -172,7 +172,7 @@ func openDB(filename string) (*database, error) {
 	db.addPlacementStmt = conn.Prepare("INSERT INTO mw_player_placements (rando_id, player_id, group_name, index_, item_name, location_name) VALUES (?, ?, ?, ?, ?, ?)")
 	db.getPlayerSeedStmt = conn.Prepare("SELECT rando_seed FROM mw_players WHERE rando_id = ? AND player_id = ?")
 	db.getPlayerPlacementsStmt = conn.Prepare("SELECT group_name, item_name, location_name FROM mw_player_placements WHERE rando_id = ? AND player_id = ? ORDER BY index_")
-	db.listRoomPlayersStmt = conn.Prepare("SELECT nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY player_id")
+	db.listRoomPlayersStmt = conn.Prepare("SELECT player_id, nickname, rando_seed FROM mw_players WHERE rando_id = ? ORDER BY player_id")
 	db.setRoomStatusStmt = conn.Prepare("UPDATE mw_rooms SET status = ? WHERE id = ?")
 	db.getAllPlacementsStmt = conn.Prepare(`
 	SELECT player_id, group_name, item_name, location_name, index_
@@ -559,8 +559,9 @@ func (db *database) getRoomInfo(name string) (room room, err error) {
 
 	err = sqlitex.StepAll(stmt, func() {
 		room.Players = append(room.Players, player{
-			Nickname: stmt.ReadString(0),
-			HasSeed:  !stmt.IsNull(1),
+			ID: stmt.ReadInt64(0),
+			Nickname: stmt.ReadString(1),
+			HasSeed:  !stmt.IsNull(2),
 		})
 	})
 	return
@@ -575,7 +576,7 @@ func (db *database) getAttachedRandos(randoID int64) (worlds []world, err error)
 	stmt := db.listRoomPlayersStmt
 	stmt.BindInt64(1, randoID)
 	err = sqlitex.StepAll(stmt, func() {
-		seeds = append(seeds, stmt.ReadInt32(1))
+		seeds = append(seeds, stmt.ReadInt32(2))
 	})
 	if err != nil {
 		return
@@ -654,7 +655,7 @@ func (db *database) getShuffleResult(randoID int64, playerID int64) (result mwpr
 	stmt := db.listRoomPlayersStmt
 	stmt.BindInt64(1, randoID)
 	err = sqlitex.StepAll(stmt, func() {
-		result.Nicknames = append(result.Nicknames, stmt.ReadString(0))
+		result.Nicknames = append(result.Nicknames, stmt.ReadString(1))
 	})
 	if err != nil {
 		return
