@@ -1,0 +1,5 @@
+{
+    "ListenAddress": "localhost",
+    "ConsolePort": "8000",
+    "MWPort": "38281"
+}
