@@ -114,7 +114,7 @@ waitingForReadyOrJoin:
 			var err error
 			roomInfo, err = db.joinRoom(msg.Room, msg.Nickname)
 			if err == errRoomNotExist {
-				log.Printf("%s tried to access nonexistent room %q", conn.RemoteAddr(), msg.Room)
+				log.Printf("%q tried to access nonexistent room %q", msg.Nickname, msg.Room)
 				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
 				continue
 			}
@@ -125,6 +125,10 @@ waitingForReadyOrJoin:
 			conn.Send(mwproto.ReadyConfirmMessage{Ready: 1, Names: []string{msg.Nickname}})
 			conn.Send(mwproto.RequestRandoMessage{})
 			break waitingForReadyOrJoin
+		case mwproto.ItemSyncReadyMessage:
+			log.Printf("%q tried to access ItemSync room %q", msg.Nickname, msg.Room)
+			conn.Send(mwproto.ReadyDenyMessage{Description: "ItemSync not supported on this server"})
+			continue
 		case mwproto.JoinMessage:
 			log.Printf("%#v", msg)
 			err := db.joinShuffledRoom(msg.RandoID, msg.PlayerID)

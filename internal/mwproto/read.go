@@ -41,6 +41,8 @@ func Read(r io.Reader) (Message, error) {
 		return unmarshal[PingMessage](payload)
 	case typeReady:
 		return unmarshal[ReadyMessage](payload)
+	case typeItemSyncReady:
+		return unmarshal[ItemSyncReadyMessage](payload)
 	case typeReadyConfirm:
 		return unmarshal[ReadyConfirmMessage](payload)
 	case typeJoin:

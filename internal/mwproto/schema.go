@@ -35,7 +35,7 @@ const (
 	typeInitiateSyncGame
 	typeApplySettings
 	typeRequestSettings
-	typeISReady
+	typeItemSyncReady
 	typeDatasReceive
 	typeDatasReceiveConfirm
 	typeConnectedPlayersChanged
@@ -99,6 +99,17 @@ type KeyValuePair struct {
 
 func (m ReadyMessage) msgType() messageType {
 	return typeReady
+}
+
+type ItemSyncReadyMessage struct {
+	Room          string
+	Nickname      string
+	Hash          int32
+	ReadyMetadata []KeyValuePair
+}
+
+func (m ItemSyncReadyMessage) msgType() messageType {
+	return typeItemSyncReady
 }
 
 type ReadyConfirmMessage struct {

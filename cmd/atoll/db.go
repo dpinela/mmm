@@ -559,7 +559,7 @@ func (db *database) getRoomInfo(name string) (room room, err error) {
 
 	err = sqlitex.StepAll(stmt, func() {
 		room.Players = append(room.Players, player{
-			ID: stmt.ReadInt64(0),
+			ID:       stmt.ReadInt64(0),
 			Nickname: stmt.ReadString(1),
 			HasSeed:  !stmt.IsNull(2),
 		})
