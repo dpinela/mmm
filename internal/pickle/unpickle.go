@@ -1,6 +1,7 @@
 package pickle
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"reflect"
@@ -18,6 +19,10 @@ type Object struct {
 
 type Tuple struct {
 	array any
+}
+
+func (t Tuple) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.array)
 }
 
 func Decode[T any](r io.Reader, p *T) error {
