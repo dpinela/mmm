@@ -1,0 +1,12 @@
+[Unit]
+Description=Atoll Multiworld Server
+Documentation=https://github.com/dpinela/mmm/blob/main/cmd/atoll/README.md
+After=network.target
+
+[Service]
+Type=exec
+ExecStart=%h/bin/atoll %h/atoll-workdir
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
