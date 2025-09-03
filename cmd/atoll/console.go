@@ -36,7 +36,7 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 		displayRoom(w, req, db)
 	})
 	mux.HandleFunc("POST /unjoin-player", func(w http.ResponseWriter, req *http.Request) {
-		unjoinPlayer(w, req, db)
+		unjoinPlayer(w, req, db, nf)
 	})
 	err = http.ListenAndServe(cfg.ListenAddress+":"+cfg.ConsolePort, mux)
 	if err != nil {
@@ -123,7 +123,7 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *not
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }
 
-func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database) {
+func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
 	if err := req.ParseForm(); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -160,5 +160,6 @@ func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database) {
 		http.Error(w, err.Error(), 500)
 	}
 	log.Printf("room %d, player %d deleted", randoID, playerID)
+	nf.playerChangeTopic.Notify(randoID)
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }

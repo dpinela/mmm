@@ -229,9 +229,10 @@ const (
 )
 
 type joinedRoom struct {
-	randoID  int64
-	playerID int64
-	status   int
+	randoID     int64
+	playerID    int64
+	status      int
+	playerNames []string
 }
 
 func (db *database) joinRoom(roomName string, nickname string) (room joinedRoom, err error) {
@@ -267,6 +268,11 @@ func (db *database) joinRoom(roomName string, nickname string) (room joinedRoom,
 	stmt.BindString(2, nickname)
 	err = sqlitex.StepOnce(stmt, func() {
 		room.playerID = stmt.ReadInt64(0)
+	})
+	stmt = db.listRoomPlayersStmt
+	stmt.BindInt64(1, room.randoID)
+	err = sqlitex.StepAll(stmt, func() {
+		room.playerNames = append(room.playerNames, stmt.ReadString(1))
 	})
 	return
 }
@@ -563,6 +569,19 @@ func (db *database) getRoomInfo(name string) (room room, err error) {
 			Nickname: stmt.ReadString(1),
 			HasSeed:  !stmt.IsNull(2),
 		})
+	})
+	return
+}
+
+func (db *database) getRoomPlayerNames(randoID int64) (playerNames []string, err error) {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	stmt := db.listRoomPlayersStmt
+	stmt.BindInt64(1, randoID)
+
+	err = sqlitex.StepAll(stmt, func() {
+		playerNames = append(playerNames, stmt.ReadString(1))
 	})
 	return
 }

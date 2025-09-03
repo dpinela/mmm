@@ -94,6 +94,7 @@ func serveClient(conn *mwproto.ServerConn, db *database, nf *notifier) {
 	// More than one pending notification is redundant anyway. The sending side will drop
 	// redundant ones automatically.
 	shuffleNotifications := make(chan struct{}, 1)
+	playerChangeNotifications := make(chan struct{}, 1)
 
 waitingForReadyOrJoin:
 	for {
@@ -122,7 +123,8 @@ waitingForReadyOrJoin:
 				log.Println(err)
 				return
 			}
-			conn.Send(mwproto.ReadyConfirmMessage{Ready: 1, Names: []string{msg.Nickname}})
+			nf.playerChangeTopic.Notify(roomInfo.randoID)
+			conn.Send(readyConfirm(roomInfo.playerNames))
 			conn.Send(mwproto.RequestRandoMessage{})
 			break waitingForReadyOrJoin
 		case mwproto.ItemSyncReadyMessage:
@@ -157,6 +159,8 @@ waitingForReadyOrJoin:
 	// to resolve the issue.
 	nf.shuffleTopic.Listen(roomInfo.randoID, shuffleNotifications)
 	defer nf.shuffleTopic.Mute(roomInfo.randoID, shuffleNotifications)
+	nf.playerChangeTopic.Listen(roomInfo.randoID, playerChangeNotifications)
+	defer nf.playerChangeTopic.Mute(roomInfo.randoID, playerChangeNotifications)
 
 	var attachedRando *mwproto.RandoGeneratedMessage
 
@@ -214,7 +218,21 @@ waitingForReadyOrJoin:
 				log.Println(err)
 				return
 			}
+		case <-playerChangeNotifications:
+			names, err := db.getRoomPlayerNames(roomInfo.randoID)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			conn.Send(readyConfirm(names))
 		}
+	}
+}
+
+func readyConfirm(names []string) mwproto.ReadyConfirmMessage {
+	return mwproto.ReadyConfirmMessage{
+		Ready: int32(len(names)),
+		Names: names,
 	}
 }
 

@@ -5,9 +5,10 @@ import (
 )
 
 type notifier struct {
-	notchCostTopic ping.Topic[int64]
-	shuffleTopic   ping.Topic[int64]
-	itemTopic      ping.Topic[subscriberID]
+	notchCostTopic    ping.Topic[int64]
+	shuffleTopic      ping.Topic[int64]
+	playerChangeTopic ping.Topic[int64]
+	itemTopic         ping.Topic[subscriberID]
 }
 
 func newNotifier() *notifier {
