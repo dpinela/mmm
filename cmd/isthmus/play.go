@@ -473,6 +473,7 @@ mainMessageLoop:
 						})
 						locations = append(locations, p.apLocationID)
 					}
+					log.Println("Starting release")
 					if err := state.addUnconfirmedItems(messages...); err != nil {
 						return err
 					}
@@ -482,6 +483,14 @@ mainMessageLoop:
 					for _, m := range messages {
 						conn.Send(m)
 					}
+					log.Printf("%d items released", len(messages))
+					apconn.Send(approto.PrintJSONMessage{
+						Cmd:  "PrintJSON",
+						Type: "CommandResult",
+						Data: []approto.JSONMessagePart{
+							{Type: "text", Text: fmt.Sprintf("%d items released", len(messages))},
+						},
+					})
 				default:
 					log.Printf("client says %q", msg.Text)
 				}
