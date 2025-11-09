@@ -29,7 +29,7 @@ like this:
 
 If you don't have the `isthmus` executable in your PATH, you will need to navigate to the directory
 where you put it first, and also invoke it as `./isthmus` if not on Windows. Make sure to replace
-the path with the path to the actual .archipelago file you want to use, and "eggu" with the
+the path with the path to the actual Archipelago output file you want to use, and "eggu" with the
 MultiWorld room you want to join. Also keep in mind that the savefile should not already exist;
 if it does, choose a different name or delete the existing file instead.
 
