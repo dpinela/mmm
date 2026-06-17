@@ -4,10 +4,11 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dpinela/mmm/internal/apdata"
 	"github.com/dpinela/mmm/internal/mwproto"
 )
 
-func apToMWPlacements(data apdata) ([]mwproto.Placement, error) {
+func apToMWPlacements(data apdata.File) ([]mwproto.Placement, error) {
 	slotID := singularKey(data.SlotInfo)
 	slot := data.SlotInfo[slotID]
 	dpkg, ok := data.Datapackage[slot.Game]

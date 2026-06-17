@@ -5,9 +5,11 @@ import (
 	"html/template"
 	"io/fs"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"strconv"
 
+	"github.com/dpinela/mmm/internal/apdata"
 	"github.com/dpinela/mmm/internal/sqlite"
 )
 
@@ -162,4 +164,50 @@ func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database, nf *no
 	log.Printf("room %d, player %d deleted", randoID, playerID)
 	nf.playerChangeTopic.Notify(randoID)
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
+}
+
+func attachArchipelago(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
+	if err := req.ParseMultipartForm(20_000_000); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+
+	rawRoomID := req.FormValue("randoID")
+	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
+	if err != nil {
+		http.NotFound(w, req)
+		return
+	}
+
+	name, err := db.getRoomName(randoID)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	apfiles := req.MultipartForm.File["apfile"]
+	for _, f := range apfiles {
+		if err := attachArchipelagoFile(f, db); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+
+	nf.playerChangeTopic.Notify(randoID)
+	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
+}
+
+func attachArchipelagoFile(fh *multipart.FileHeader, db *database) error {
+	f, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	_, err = apdata.Read(f)
+	if err != nil {
+		return err
+	}
+
+	return err
 }

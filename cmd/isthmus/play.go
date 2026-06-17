@@ -10,11 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dpinela/mmm/internal/apdata"
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/mwproto"
 )
 
-func playMW(opts options, data apdata) error {
+func playMW(opts options, data apdata.File) error {
 	server := approto.Serve(opts.apport, opts.verbose)
 	defer server.Close()
 	for {
@@ -29,7 +30,7 @@ func playMW(opts options, data apdata) error {
 	}
 }
 
-func playMWWithConn(opts options, data apdata, apconn *approto.ClientConn) error {
+func playMWWithConn(opts options, data apdata.File, apconn *approto.ClientConn) error {
 	defer apconn.Close()
 	state, err := openSavefile(opts.savefile)
 	if err != nil {

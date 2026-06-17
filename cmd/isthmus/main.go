@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/dpinela/mmm/internal/apdata"
 	"github.com/dpinela/mmm/internal/approto"
 	"github.com/dpinela/mmm/internal/pickle"
 )
@@ -79,45 +80,7 @@ func singularKey[K comparable, V any](m map[K]V) K {
 	panic("singularKey undefined on empty map")
 }
 
-type apdata struct {
-	ConnectNames      map[string][]int
-	Spheres           []map[int][]int64
-	Locations         map[int]map[int64][]int64
-	Datapackage       map[string]apgamedata
-	PrecollectedItems map[int][]int64
-	SlotInfo          map[int]apslot
-	SlotData          map[int]map[string]any `pickle:"require_string_keys"`
-	Version           []int
-	Tags              []string
-	ServerOptions     apserveroptions
-	SeedName          string
-}
-
-type apserveroptions struct {
-	LocationCheckPoints int
-	HintCost            int
-	ReleaseMode         string
-	CollectMode         string
-	RemainingMode       string
-}
-
-type apslot struct {
-	Name string
-	Game string
-	Type struct {
-		Code int
-	}
-	GroupMembers []string
-}
-
-type apgamedata struct {
-	ItemNameToID     map[string]int64
-	LocationNameToID map[string]int64
-	Checksum         string
-	Original         map[string]any `pickle:"require_string_keys,remainder"`
-}
-
-func readAPFile(name string) (data apdata, err error) {
+func readAPFile(name string) (data apdata.File, err error) {
 	if strings.HasSuffix(name, ".zip") {
 		var z *zip.ReadCloser
 		z, err = zip.OpenReader(name)
@@ -148,7 +111,7 @@ func readAPFile(name string) (data apdata, err error) {
 	return readAPFileFromReader(apfile)
 }
 
-func readAPFileFromReader(apfile io.Reader) (data apdata, err error) {
+func readAPFileFromReader(apfile io.Reader) (data apdata.File, err error) {
 	const expectedAPFileVersion = 3
 
 	r := bufio.NewReader(apfile)

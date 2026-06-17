@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/dpinela/mmm/internal/apdata"
 	"github.com/dpinela/mmm/internal/mwproto"
 )
 
-func setupMW(opts options, data apdata) error {
+func setupMW(opts options, data apdata.File) error {
 	if len(data.SlotInfo) != 1 {
 		return fmt.Errorf(".archipelago contains %d slots, expected only one", len(data.SlotInfo))
 	}

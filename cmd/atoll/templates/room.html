@@ -10,6 +10,11 @@
         {{$status := .Status}}
         {{$randoID := .ID}}
         {{if eq $status 0 }}
+        <form action="/attach-ap" method="POST">
+            <input type="hidden" name="randoID" value="{{$randoID}}">
+            <input type="file" name="apfile">
+            <input type="submit" value="Attach Archipelago">
+        </form>
         <form action="/shuffle" method="POST">
             <input type="hidden" name="randoID" value="{{$randoID}}">
             <input type="submit" value="Shuffle">
