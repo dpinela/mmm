@@ -30,7 +30,7 @@ type Server struct {
 func Serve(port int, verbose bool) *Server {
 	listener := &Server{
 		connections: make(chan *ClientConn, 1),
-		verbose: verbose,
+		verbose:     verbose,
 	}
 	listener.httpServer.Addr = fmt.Sprintf("localhost:%d", port)
 	listener.httpServer.Handler = http.HandlerFunc(listener.handleConnection)
