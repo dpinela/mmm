@@ -158,6 +158,7 @@ waitingForReadyOrJoin:
 				log.Println(err)
 				return
 			}
+			defer mw.Close()
 
 			playerID, playerNames, err = mw.Join(msg.Nickname)
 			if err != nil {
