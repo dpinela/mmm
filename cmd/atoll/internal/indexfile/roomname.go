@@ -1,4 +1,4 @@
-package main
+package indexfile
 
 import (
 	"math/rand/v2"

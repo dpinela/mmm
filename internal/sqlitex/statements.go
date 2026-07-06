@@ -51,7 +51,15 @@ func Exec(stmt *sqlite.Statement) error {
 }
 
 func Transaction(db *sqlite.DB, tx func() error) (err error) {
-	if err = db.Exec("BEGIN"); err != nil {
+	return transaction(db, "BEGIN", tx)
+}
+
+func WriteTransaction(db *sqlite.DB, tx func() error) (err error) {
+	return transaction(db, "BEGIN IMMEDIATE", tx)
+}
+
+func transaction(db *sqlite.DB, initStmt string, tx func() error) (err error) {
+	if err = db.Exec(initStmt); err != nil {
 		return
 	}
 	defer func() {

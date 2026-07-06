@@ -2,10 +2,8 @@ package sqlite
 
 // compiler flags recommended by the SQLite documentation at:
 // https://www.sqlite.org/compile.html
-// We don't need SQLite itself to be thread-safe, as we can manage concurrency
-// internally.
 
-// #cgo CFLAGS: -DSQLITE_DQS=0 -DSQLITE_THREADSAFE=0 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DECLTYPE -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_USE_ALLOCA -DSQLITE_OMIT_AUTOINIT -DSQLITE_STRICT_SUBTYPE=1
+// #cgo CFLAGS: -DSQLITE_DQS=0 -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_LIKE_DOESNT_MATCH_BLOBS -DSQLITE_MAX_EXPR_DEPTH=0 -DSQLITE_OMIT_DECLTYPE -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_OMIT_SHARED_CACHE -DSQLITE_USE_ALLOCA -DSQLITE_OMIT_AUTOINIT -DSQLITE_STRICT_SUBTYPE=1
 // #include "sqlite3.h"
 // #include <stdlib.h>
 import "C"
@@ -46,6 +44,17 @@ func (db *DB) Prepare(sql string) *Statement {
 	n := len(db.statements)
 	db.statements = append(db.statements, Statement{})
 	s := &db.statements[n]
+	db.prepare(sql, s)
+	return s
+}
+
+func (db *DB) PrepareTemp(sql string) *Statement {
+	var s Statement
+	db.prepare(sql, &s)
+	return &s
+}
+
+func (db *DB) prepare(sql string, s *Statement) {
 	res := C.sqlite3_prepare_v2(db.conn, cPointer(sql), C.int(len(sql)), &s.stmt, nil)
 	if res != C.SQLITE_OK {
 		var panicMsg strings.Builder
@@ -62,7 +71,6 @@ func (db *DB) Prepare(sql string) *Statement {
 		}
 		panic(panicMsg.String())
 	}
-	return s
 }
 
 func (db *DB) Exec(sql string) error {
@@ -201,8 +209,20 @@ func (err sqliteError) Error() string {
 	return C.GoString(C.sqlite3_errstr(C.int(err)))
 }
 
+func (err sqliteError) Is(target error) bool {
+	baseCode, isSqlite := target.(sqliteError)
+	if !(isSqlite && (baseCode&0xffffff00) == 0) {
+		return false
+	}
+	return err&0xff == baseCode
+}
+
 func errorFromCode(code C.int) error {
 	return sqliteError(code)
 }
 
-const ErrConstraintUnique = sqliteError(C.SQLITE_CONSTRAINT_UNIQUE)
+const (
+	ErrConstraintUnique = sqliteError(C.SQLITE_CONSTRAINT_UNIQUE)
+	ErrCantOpen         = sqliteError(C.SQLITE_CANTOPEN)
+	ErrBusy             = sqliteError(C.SQLITE_BUSY)
+)

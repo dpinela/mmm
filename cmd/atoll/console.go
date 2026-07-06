@@ -2,14 +2,15 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"html/template"
 	"io/fs"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"strconv"
 
-	"github.com/dpinela/mmm/internal/apdata"
+	"github.com/dpinela/mmm/cmd/atoll/internal/indexfile"
+	"github.com/dpinela/mmm/cmd/atoll/internal/mwfile"
 	"github.com/dpinela/mmm/internal/sqlite"
 )
 
@@ -21,7 +22,7 @@ var templatePages embed.FS
 
 var templates = template.Must(template.ParseFS(templatePages, "templates/*.html"))
 
-func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
+func serveConsole(cfg *serverConfig, workdir string, nf *notifier) {
 	mux := http.NewServeMux()
 	static, err := fs.Sub(staticPages, "static")
 	if err != nil {
@@ -29,16 +30,16 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 	}
 	mux.Handle("/", http.FileServerFS(static))
 	mux.HandleFunc("POST /create-room", func(w http.ResponseWriter, req *http.Request) {
-		createRoom(w, req, db)
+		createRoom(w, req, workdir)
 	})
 	mux.HandleFunc("POST /shuffle", func(w http.ResponseWriter, req *http.Request) {
-		shuffleRoom(w, req, db, nf)
+		shuffleRoom(w, req, workdir, nf)
 	})
 	mux.HandleFunc("GET /rooms/{randoName}", func(w http.ResponseWriter, req *http.Request) {
-		displayRoom(w, req, db)
+		displayRoom(w, req, workdir)
 	})
 	mux.HandleFunc("POST /unjoin-player", func(w http.ResponseWriter, req *http.Request) {
-		unjoinPlayer(w, req, db, nf)
+		unjoinPlayer(w, req, workdir, nf)
 	})
 	err = http.ListenAndServe(cfg.ListenAddress+":"+cfg.ConsolePort, mux)
 	if err != nil {
@@ -46,168 +47,140 @@ func serveConsole(cfg *serverConfig, db *database, nf *notifier) {
 	}
 }
 
-func createRoom(w http.ResponseWriter, req *http.Request, db *database) {
-	const (
-		nameEntropy = 10
-		maxRetries  = 100
-	)
-	var (
-		id   int64
-		err  error
-		name string
-	)
-	for range maxRetries {
-		name = generateRoomName(nameEntropy)
-		id, err = db.createRoom(name)
-		if err == sqlite.ErrConstraintUnique {
-			continue
-		}
-		if err == nil {
-			break
-		}
+func createRoom(w http.ResponseWriter, req *http.Request, workdir string) {
+	index, err := openIndex(workdir)
+	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	// If this happens, we ran out of attempts.
+	defer index.Close()
+
+	name, err := index.CreateRoom()
 	if err != nil {
-		http.Redirect(w, req, "/too-many-rooms.html", http.StatusSeeOther)
+		http.Error(w, err.Error(), 500)
 		return
 	}
-	log.Printf("created room %q with ID %d", name, id)
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }
 
-func displayRoom(w http.ResponseWriter, req *http.Request, db *database) {
+type room struct {
+	ID       int64
+	Name     string
+	Shuffled bool
+	Players  []mwfile.Player
+}
+
+func openMWByName(workdir, name string) (indexfile.RandoID, *mwfile.File, error) {
+	index, err := openIndex(workdir)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer index.Close()
+
+	randoID, err := index.FindRoom(name)
+	if err == indexfile.ErrRoomNotExist {
+		return 0, nil, err
+	}
+
+	mw, err := openMW(workdir, randoID)
+	if errors.Is(err, sqlite.ErrCantOpen) {
+		if err := index.DeleteRoom(randoID); err != nil {
+			log.Printf("delete room %d: %s", randoID, err)
+		}
+		err = indexfile.ErrRoomNotExist
+	}
+	return randoID, mw, err
+}
+
+func displayRoom(w http.ResponseWriter, req *http.Request, workdir string) {
 	roomName := req.PathValue("randoName")
-	info, err := db.getRoomInfo(roomName)
-	if err == errRoomNotExist {
+	randoID, mw, err := openMWByName(workdir, roomName)
+	if err == indexfile.ErrRoomNotExist {
 		http.NotFound(w, req)
 		return
 	}
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer mw.Close()
+
+	info := room{ID: int64(randoID), Name: roomName}
+	info.Shuffled, err = mw.IsShuffled()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	info.Players, err = mw.GetPlayers()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
 	if err := templates.ExecuteTemplate(w, "room.html", info); err != nil {
 		log.Println(err)
 	}
 }
 
-func shuffleRoom(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
-	req.ParseForm()
-	rawRoomID := req.FormValue("randoID")
-	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-
-	if err := db.lockRoom(randoID); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	worlds, err := db.getAttachedRandos(randoID)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	result := mix(worlds)
-	if err := db.saveShuffleResult(randoID, result); err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-	nf.shuffleTopic.Notify(randoID)
-
-	log.Println("rando generated for room", randoID)
-
-	name, err := db.getRoomName(randoID)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
-}
-
-func unjoinPlayer(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
+func handleRoomOp(w http.ResponseWriter, req *http.Request, workdir string, handler func(string, indexfile.RandoID, *mwfile.File)) {
 	if err := req.ParseForm(); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
 	}
 
-	rawRoomID := req.FormValue("randoID")
-	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
-	if err != nil {
+	roomName := req.FormValue("randoName")
+	randoID, mw, err := openMWByName(workdir, roomName)
+	if err == indexfile.ErrRoomNotExist {
 		http.NotFound(w, req)
 		return
 	}
-
-	rawPlayerID := req.FormValue("playerID")
-	playerID, err := strconv.ParseInt(rawPlayerID, 10, 64)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-
-	name, err := db.getRoomName(randoID)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+	defer mw.Close()
 
-	err = db.unjoinRoom(randoID, playerID)
-	if err == errRoomNotOpen {
-		if err := templates.ExecuteTemplate(w, "room-already-shuffled.html", name); err != nil {
-			log.Println(err)
-		}
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-	}
-	log.Printf("room %d, player %d deleted", randoID, playerID)
-	nf.playerChangeTopic.Notify(randoID)
-	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
+	handler(roomName, randoID, mw)
 }
 
-func attachArchipelago(w http.ResponseWriter, req *http.Request, db *database, nf *notifier) {
-	if err := req.ParseMultipartForm(20_000_000); err != nil {
-		http.Error(w, err.Error(), 400)
-		return
-	}
-
-	rawRoomID := req.FormValue("randoID")
-	randoID, err := strconv.ParseInt(rawRoomID, 10, 64)
-	if err != nil {
-		http.NotFound(w, req)
-		return
-	}
-
-	name, err := db.getRoomName(randoID)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	apfiles := req.MultipartForm.File["apfile"]
-	for _, f := range apfiles {
-		if err := attachArchipelagoFile(f, db); err != nil {
+func shuffleRoom(w http.ResponseWriter, req *http.Request, workdir string, nf *notifier) {
+	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.RandoID, mw *mwfile.File) {
+		if err := mw.Shuffle(); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-	}
 
-	nf.playerChangeTopic.Notify(randoID)
-	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
+		nf.shuffleTopic.Notify(indexfile.RandoID(randoID))
+
+		log.Println("rando generated for room", randoID)
+
+		http.Redirect(w, req, "/rooms/"+roomName, http.StatusSeeOther)
+	})
 }
 
-func attachArchipelagoFile(fh *multipart.FileHeader, db *database) error {
-	f, err := fh.Open()
-	if err != nil {
-		return err
-	}
-	defer f.Close()
+func unjoinPlayer(w http.ResponseWriter, req *http.Request, workdir string, nf *notifier) {
+	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.RandoID, mw *mwfile.File) {
+		rawPlayerID := req.FormValue("playerID")
+		playerID, err := strconv.ParseInt(rawPlayerID, 10, 64)
+		if err != nil {
+			http.NotFound(w, req)
+			return
+		}
+		err = mw.Unjoin(mwfile.PlayerID(playerID))
+		if err == mwfile.ErrRoomAlreadyShuffled {
+			if err := templates.ExecuteTemplate(w, "room-already-shuffled.html", roomName); err != nil {
+				log.Println(err)
+			}
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
 
-	_, err = apdata.Read(f)
-	if err != nil {
-		return err
-	}
-
-	return err
+		log.Printf("room %d, player %d deleted", randoID, playerID)
+		nf.playerChangeTopic.Notify(indexfile.RandoID(randoID))
+		http.Redirect(w, req, "/rooms/"+roomName, http.StatusSeeOther)
+	})
 }
