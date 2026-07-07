@@ -49,26 +49,3 @@ func Exec(stmt *sqlite.Statement) error {
 	defer stmt.Reset()
 	return stmt.Exec()
 }
-
-func Transaction(db *sqlite.DB, tx func() error) (err error) {
-	return transaction(db, "BEGIN", tx)
-}
-
-func WriteTransaction(db *sqlite.DB, tx func() error) (err error) {
-	return transaction(db, "BEGIN IMMEDIATE", tx)
-}
-
-func transaction(db *sqlite.DB, initStmt string, tx func() error) (err error) {
-	if err = db.Exec(initStmt); err != nil {
-		return
-	}
-	defer func() {
-		if err != nil {
-			db.Exec("ROLLBACK")
-		}
-	}()
-	if err = tx(); err != nil {
-		return
-	}
-	return db.Exec("COMMIT")
-}

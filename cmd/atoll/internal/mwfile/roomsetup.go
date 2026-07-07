@@ -25,7 +25,7 @@ func (f *File) Join(nickname string) (playerID PlayerID, playerNames []string, e
 			return err
 		}
 
-		isShuffled, err := f.IsShuffled()
+		isShuffled, err := f.isShuffled()
 		if err != nil {
 			return err
 		}
@@ -55,7 +55,7 @@ func (f *File) Join(nickname string) (playerID PlayerID, playerNames []string, e
 
 func (f *File) Unjoin(playerID PlayerID) error {
 	return sqlitex.WriteTransaction(f.db, func() error {
-		isShuffled, err := f.IsShuffled()
+		isShuffled, err := f.isShuffled()
 		if err != nil {
 			return err
 		}
@@ -297,6 +297,14 @@ var (
 )
 
 func (f *File) IsShuffled() (shuffled bool, err error) {
+	err = sqlitex.RetryWhileBusy(func() error {
+		shuffled, err = f.isShuffled()
+		return err
+	})
+	return
+}
+
+func (f *File) isShuffled() (shuffled bool, err error) {
 	stmt := f.db.PrepareTemp("SELECT EXISTS(SELECT 1 FROM mw_result_placements)")
 	defer stmt.Close()
 
@@ -313,14 +321,16 @@ type Player struct {
 }
 
 func (f *File) GetPlayers() (players []Player, err error) {
-	stmt := f.db.PrepareTemp("SELECT player_id, nickname, rando_seed FROM mw_players ORDER BY player_id")
-	defer stmt.Close()
+	err = sqlitex.RetryWhileBusy(func() error {
+		stmt := f.db.PrepareTemp("SELECT player_id, nickname, rando_seed FROM mw_players ORDER BY player_id")
+		defer stmt.Close()
 
-	err = sqlitex.StepAll(stmt, func() {
-		players = append(players, Player{
-			ID:       stmt.ReadInt64(0),
-			Nickname: stmt.ReadString(1),
-			HasSeed:  !stmt.IsNull(2),
+		return sqlitex.StepAll(stmt, func() {
+			players = append(players, Player{
+				ID:       stmt.ReadInt64(0),
+				Nickname: stmt.ReadString(1),
+				HasSeed:  !stmt.IsNull(2),
+			})
 		})
 	})
 	return

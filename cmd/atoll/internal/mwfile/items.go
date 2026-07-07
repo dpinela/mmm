@@ -20,21 +20,23 @@ func (f *File) GetUnconfirmedItems(playerID PlayerID) ([]mwproto.DataReceiveMess
 }
 
 func (f *File) getItemsWithStatusBelow(playerID PlayerID, status int) (items []mwproto.DataReceiveMessage, err error) {
-	stmt := f.db.PrepareTemp(`
-	SELECT msi.sender_id, mp.nickname, msi.label, msi.content
-	FROM mw_sent_items msi
-	JOIN mw_players mp ON msi.sender_id = mp.player_id WHERE msi.destination_player_id = ? AND msi.status < ?`)
-	defer stmt.Close()
+	err = sqlitex.RetryWhileBusy(func() error {
+		stmt := f.db.PrepareTemp(`
+		SELECT msi.sender_id, mp.nickname, msi.label, msi.content
+		FROM mw_sent_items msi
+		JOIN mw_players mp ON msi.sender_id = mp.player_id WHERE msi.destination_player_id = ? AND msi.status < ?`)
+		defer stmt.Close()
 
-	stmt.BindInt64(1, int64(playerID))
-	stmt.BindInt(2, status)
+		stmt.BindInt64(1, int64(playerID))
+		stmt.BindInt(2, status)
 
-	err = sqlitex.StepAll(stmt, func() {
-		items = append(items, mwproto.DataReceiveMessage{
-			FromID:  int32(stmt.ReadInt32(0)),
-			From:    stmt.ReadString(1),
-			Label:   stmt.ReadString(2),
-			Content: stmt.ReadString(3),
+		return sqlitex.StepAll(stmt, func() {
+			items = append(items, mwproto.DataReceiveMessage{
+				FromID:  int32(stmt.ReadInt32(0)),
+				From:    stmt.ReadString(1),
+				Label:   stmt.ReadString(2),
+				Content: stmt.ReadString(3),
+			})
 		})
 	})
 	return
@@ -59,24 +61,28 @@ func (f *File) SendItems(fromPlayerID PlayerID, items ...mwproto.Item) error {
 }
 
 func (f *File) ConfirmItem(toPlayerID PlayerID, item mwproto.DataReceiveConfirmMessage) error {
-	stmt := f.db.PrepareTemp(`
-	UPDATE mw_sent_items
-	SET status = 1
-	WHERE sender_id = (SELECT player_id FROM mw_players WHERE nickname = ?)
-	AND destination_player_id = ? AND label = ? AND content = ? AND status < 2`)
-	defer stmt.Close()
+	return sqlitex.RetryWhileBusy(func() error {
+		stmt := f.db.PrepareTemp(`
+		UPDATE mw_sent_items
+		SET status = 1
+		WHERE sender_id = (SELECT player_id FROM mw_players WHERE nickname = ?)
+		AND destination_player_id = ? AND label = ? AND content = ? AND status < 2`)
+		defer stmt.Close()
 
-	stmt.BindString(1, item.From)
-	stmt.BindInt64(2, int64(toPlayerID))
-	stmt.BindString(3, item.Label)
-	stmt.BindString(4, item.Data)
-	return stmt.Exec()
+		stmt.BindString(1, item.From)
+		stmt.BindInt64(2, int64(toPlayerID))
+		stmt.BindString(3, item.Label)
+		stmt.BindString(4, item.Data)
+		return stmt.Exec()
+	})
 }
 
 func (f *File) SaveConfirmedItems(playerID PlayerID) error {
-	stmt := f.db.PrepareTemp("UPDATE mw_sent_items SET status = 2 WHERE destination_player_id = ? AND status = 1")
-	defer stmt.Close()
+	return sqlitex.RetryWhileBusy(func() error {
+		stmt := f.db.PrepareTemp("UPDATE mw_sent_items SET status = 2 WHERE destination_player_id = ? AND status = 1")
+		defer stmt.Close()
 
-	stmt.BindInt64(1, int64(playerID))
-	return stmt.Exec()
+		stmt.BindInt64(1, int64(playerID))
+		return stmt.Exec()
+	})
 }

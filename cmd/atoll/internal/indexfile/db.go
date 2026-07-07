@@ -40,22 +40,25 @@ func (f *File) CreateRoom() (name string, err error) {
 		entropy    = 10
 	)
 
-	stmt := f.db.PrepareTemp("INSERT INTO mw_rooms (name) VALUES (?)")
-	defer stmt.Close()
+	err = sqlitex.RetryWhileBusy(func() error {
+		stmt := f.db.PrepareTemp("INSERT INTO mw_rooms (name) VALUES (?)")
+		defer stmt.Close()
 
-	for range maxRetries {
-		name := generateRoomName(entropy)
-		stmt.BindString(1, name)
-		err := sqlitex.Exec(stmt)
-		if err == sqlite.ErrConstraintUnique {
-			continue
+		for range maxRetries {
+			name = generateRoomName(entropy)
+			stmt.BindString(1, name)
+			err := sqlitex.Exec(stmt)
+			if err == sqlite.ErrConstraintUnique {
+				continue
+			}
+			if err == nil {
+				return nil
+			}
+			return err
 		}
-		if err == nil {
-			return name, nil
-		}
-		return "", err
-	}
-	return "", ErrTooManyRooms
+		return ErrTooManyRooms
+	})
+	return
 }
 
 func (f *File) FindRoom(roomName string) (randoID RandoID, err error) {
