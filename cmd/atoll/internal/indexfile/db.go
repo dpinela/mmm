@@ -34,20 +34,22 @@ func (f *File) Close() {
 
 var ErrTooManyRooms = errors.New("too many rooms")
 
-func (f *File) CreateRoom() (name string, err error) {
+func (f *File) CreateRoom() (randoID RandoID, name string, err error) {
 	const (
 		maxRetries = 100
 		entropy    = 10
 	)
 
 	err = sqlitex.RetryWhileBusy(func() error {
-		stmt := f.db.PrepareTemp("INSERT INTO mw_rooms (name) VALUES (?)")
+		stmt := f.db.PrepareTemp("INSERT INTO mw_rooms (name) VALUES (?) RETURNING id")
 		defer stmt.Close()
 
 		for range maxRetries {
 			name = generateRoomName(entropy)
 			stmt.BindString(1, name)
-			err := sqlitex.Exec(stmt)
+			err := sqlitex.StepOnce(stmt, func() {
+				randoID = RandoID(stmt.ReadInt64(0))
+			})
 			if err == sqlite.ErrConstraintUnique {
 				continue
 			}

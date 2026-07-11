@@ -2,25 +2,24 @@ package mwfile
 
 import (
 	"github.com/dpinela/mmm/internal/sqlite"
-	"github.com/dpinela/mmm/internal/sqlitex"
 )
 
 type File struct {
 	db *sqlite.DB
 }
 
-func Open(filename string) (*File, error) {
+func Create(filename string) error {
 	const schema = `
 	PRAGMA journal_mode = WAL;
 
-	CREATE TABLE IF NOT EXISTS mw_players (
+	CREATE TABLE mw_players (
 		player_id INTEGER PRIMARY KEY CHECK (player_id >= 0),
 		nickname TEXT NOT NULL UNIQUE,
 		rando_seed INTEGER,
 		has_notch_costs INTEGER NOT NULL
 	) STRICT;
 	
-	CREATE TABLE IF NOT EXISTS mw_player_placements (
+	CREATE TABLE mw_player_placements (
 		player_id INTEGER NOT NULL,
 		group_name TEXT NOT NULL,
 		index_ INTEGER NOT NULL,
@@ -32,7 +31,7 @@ func Open(filename string) (*File, error) {
 		PRIMARY KEY (player_id, group_name, index_)
 	) STRICT;
 	
-	CREATE TABLE IF NOT EXISTS mw_ready_metadata (
+	CREATE TABLE mw_ready_metadata (
 		player_id INTEGER NOT NULL,
 		index_ INTEGER NOT NULL,
 		key TEXT NOT NULL,
@@ -43,7 +42,7 @@ func Open(filename string) (*File, error) {
 		PRIMARY KEY (player_id, index_)
 	) STRICT;
 	
-	CREATE TABLE IF NOT EXISTS mw_result_placements (
+	CREATE TABLE mw_result_placements (
 		item_player_id INTEGER NOT NULL,
 		item_name TEXT NOT NULL,
 		group_name TEXT NOT NULL,
@@ -55,7 +54,7 @@ func Open(filename string) (*File, error) {
 		FOREIGN KEY (location_player_id) REFERENCES mw_players ON DELETE CASCADE ON UPDATE CASCADE
 	) STRICT;
 	
-	CREATE TABLE IF NOT EXISTS mw_sent_items (
+	CREATE TABLE mw_sent_items (
 		sender_id INTEGER NOT NULL,
 		destination_player_id INTEGER NOT NULL,
 		label TEXT NOT NULL,
@@ -68,9 +67,9 @@ func Open(filename string) (*File, error) {
 		FOREIGN KEY (destination_player_id) REFERENCES mw_players ON DELETE CASCADE ON UPDATE CASCADE
 	) STRICT;
 
-	CREATE INDEX IF NOT EXISTS unconfirmed_items_by_recipient ON mw_sent_items (destination_player_id);
+	CREATE INDEX unconfirmed_items_by_recipient ON mw_sent_items (destination_player_id);
 
-	CREATE TABLE IF NOT EXISTS mw_notch_costs (
+	CREATE TABLE mw_notch_costs (
 		player_id INTEGER NOT NULL,
 		charm INTEGER NOT NULL,
 		cost INTEGER NOT NULL,
@@ -80,7 +79,7 @@ func Open(filename string) (*File, error) {
 		PRIMARY KEY (player_id, charm)
 	) STRICT;
 
-	CREATE TABLE IF NOT EXISTS mw_confirmed_notch_costs (
+	CREATE TABLE mw_confirmed_notch_costs (
 		sender_id INTEGER NOT NULL,
 		destination_player_id INTEGER NOT NULL,
 
@@ -91,7 +90,16 @@ func Open(filename string) (*File, error) {
 	) STRICT
 	`
 
-	db, err := sqlitex.OpenWithSchema(filename, schema)
+	db, err := sqlite.Open(filename)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Exec(schema)
+}
+
+func Open(filename string) (*File, error) {
+	db, err := sqlite.OpenExisting(filename)
 	if err != nil {
 		return nil, err
 	}

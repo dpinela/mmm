@@ -55,11 +55,17 @@ func createRoom(w http.ResponseWriter, req *http.Request, workdir string) {
 	}
 	defer index.Close()
 
-	name, err := index.CreateRoom()
+	id, name, err := index.CreateRoom()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+
+	if err := mwfile.Create(mwPath(workdir, id)); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
 	http.Redirect(w, req, "/rooms/"+name, http.StatusSeeOther)
 }
 

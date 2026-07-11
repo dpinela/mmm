@@ -46,7 +46,11 @@ func run(workdir string) error {
 }
 
 func openMW(workdir string, randoID indexfile.RandoID) (*mwfile.File, error) {
-	return mwfile.Open(filepath.Join(workdir, strconv.FormatInt(int64(randoID), 10)+".atollmw"))
+	return mwfile.Open(mwPath(workdir, randoID))
+}
+
+func mwPath(workdir string, randoID indexfile.RandoID) string {
+	return filepath.Join(workdir, strconv.FormatInt(int64(randoID), 10)+".atollmw")
 }
 
 func openIndex(workdir string) (*indexfile.File, error) {

@@ -25,14 +25,21 @@ type DB struct {
 }
 
 func Open(location string) (*DB, error) {
+	return open(location, C.SQLITE_OPEN_CREATE|C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_EXRESCODE)
+}
+
+func OpenExisting(location string) (*DB, error) {
+	return open(location, C.SQLITE_OPEN_READWRITE|C.SQLITE_OPEN_EXRESCODE)
+}
+
+func open(location string, flags C.int) (*DB, error) {
 	db := &DB{}
 	cLocation := C.CString(location)
 	defer C.free(unsafe.Pointer(cLocation))
-	err := C.sqlite3_open(cLocation, &db.conn)
+	err := C.sqlite3_open_v2(cLocation, &db.conn, flags, nil)
 	if err != C.SQLITE_OK {
 		return nil, errorFromCode(err)
 	}
-	must(C.sqlite3_extended_result_codes(db.conn, 1))
 	return db, nil
 }
 
