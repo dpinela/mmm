@@ -2,6 +2,7 @@ package mwproto
 
 import (
 	"encoding/binary"
+	"encoding/json"
 )
 
 type messageType uint32
@@ -143,6 +144,14 @@ type InitiateGameMessage struct {
 
 func (InitiateGameMessage) msgType() messageType {
 	return typeInitiateGame
+}
+
+type InitiateSyncGameMessage struct {
+	Settings map[string]json.RawMessage
+}
+
+func (InitiateSyncGameMessage) msgType() messageType {
+	return typeInitiateSyncGame
 }
 
 type RequestRandoMessage struct{}
@@ -304,6 +313,20 @@ type ConfirmCharmNotchCostsReceivedMessage struct {
 
 func (ConfirmCharmNotchCostsReceivedMessage) msgType() messageType {
 	return typeConfirmCharmNotchCostsReceived
+}
+
+type RequestSettingsMessage struct{}
+
+func (RequestSettingsMessage) msgType() messageType {
+	return typeRequestSettings
+}
+
+type ApplySettingsMessage struct {
+	Settings map[string]json.RawMessage
+}
+
+func (ApplySettingsMessage) msgType() messageType {
+	return typeApplySettings
 }
 
 const LabelMultiworldItem = "MultiWorld-Item"

@@ -103,6 +103,11 @@ func Open(filename string) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = db.Exec("PRAGMA foreign_keys = ON")
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
 	return &File{db}, nil
 }
 

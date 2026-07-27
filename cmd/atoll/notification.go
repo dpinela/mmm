@@ -6,9 +6,9 @@ import (
 )
 
 type notifier struct {
-	notchCostTopic    ping.Topic[indexfile.RandoID]
-	shuffleTopic      ping.Topic[indexfile.RandoID]
-	playerChangeTopic ping.Topic[indexfile.RandoID]
+	notchCostTopic    ping.Topic[indexfile.MWRandoID]
+	shuffleTopic      ping.Topic[indexfile.MWRandoID]
+	playerChangeTopic ping.Topic[indexfile.MWRandoID]
 	itemTopic         ping.Topic[subscriberID]
 }
 
@@ -17,6 +17,6 @@ func newNotifier() *notifier {
 }
 
 type subscriberID struct {
-	randoID  indexfile.RandoID
+	randoID  indexfile.MWRandoID
 	playerID int64
 }

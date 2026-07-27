@@ -41,15 +41,16 @@ func run(workdir string) error {
 		return fmt.Errorf("load configuration: %w", err)
 	}
 	nf := newNotifier()
+	isnf := new(isyncNotifier)
 	go serveConsole(&cfg, workdir, nf)
-	return serve(&cfg, workdir, nf)
+	return serve(&cfg, workdir, nf, isnf)
 }
 
-func openMW(workdir string, randoID indexfile.RandoID) (*mwfile.File, error) {
+func openMW(workdir string, randoID indexfile.MWRandoID) (*mwfile.File, error) {
 	return mwfile.Open(mwPath(workdir, randoID))
 }
 
-func mwPath(workdir string, randoID indexfile.RandoID) string {
+func mwPath(workdir string, randoID indexfile.MWRandoID) string {
 	return filepath.Join(workdir, strconv.FormatInt(int64(randoID), 10)+".atollmw")
 }
 
@@ -72,7 +73,7 @@ func loadConfig(filename string) (cfg serverConfig, err error) {
 	return
 }
 
-func serve(cfg *serverConfig, workdir string, nf *notifier) error {
+func serve(cfg *serverConfig, workdir string, nf *notifier, isnf *isyncNotifier) error {
 	listener, err := mwproto.Listen(cfg.ListenAddress + ":" + cfg.MWPort)
 	if err != nil {
 		return err
@@ -84,11 +85,11 @@ func serve(cfg *serverConfig, workdir string, nf *notifier) error {
 			log.Println(err)
 			continue
 		}
-		go serveClient(conn, workdir, nf)
+		go serveClient(conn, workdir, nf, isnf)
 	}
 }
 
-func serveClient(conn *mwproto.ServerConn, workdir string, nf *notifier) {
+func serveClient(conn *mwproto.ServerConn, workdir string, nf *notifier, isnf *isyncNotifier) {
 	defer conn.Close()
 
 	index, err := openIndex(workdir)
@@ -112,7 +113,8 @@ func serveClient(conn *mwproto.ServerConn, workdir string, nf *notifier) {
 
 	var (
 		mw          *mwfile.File
-		randoID     indexfile.RandoID
+		mwID        indexfile.MWRandoID
+		isID        indexfile.ISRandoID
 		playerID    mwfile.PlayerID
 		playerNames []string
 	)
@@ -137,7 +139,7 @@ waitingForReadyOrJoin:
 				conn.Send(mwproto.ReadyDenyMessage{Description: "invalid room mode"})
 				continue
 			}
-			randoID, err = index.FindRoom(msg.Room)
+			mwID, err = index.FindRoom(msg.Room)
 			if err == indexfile.ErrRoomNotExist {
 				log.Printf("%q tried to access nonexistent room %q", msg.Nickname, msg.Room)
 				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
@@ -148,10 +150,10 @@ waitingForReadyOrJoin:
 				return
 			}
 
-			mw, err = openMW(workdir, randoID)
+			mw, err = openMW(workdir, mwID)
 			if errors.Is(err, sqlite.ErrCantOpen) {
 				// deleting the file effectively deletes the room
-				if err := index.DeleteRoom(randoID); err != nil {
+				if err := index.DeleteRoom(mwID); err != nil {
 					log.Println(err)
 				}
 				log.Printf("%q tried to access nonexistent room %q", msg.Nickname, msg.Room)
@@ -169,18 +171,22 @@ waitingForReadyOrJoin:
 				log.Println(err)
 				return
 			}
-			nf.playerChangeTopic.Notify(randoID)
+			nf.playerChangeTopic.Notify(mwID)
 			conn.Send(readyConfirm(playerNames))
 			conn.Send(mwproto.RequestRandoMessage{})
 			break waitingForReadyOrJoin
 		case mwproto.ItemSyncReadyMessage:
-			log.Printf("%q tried to access ItemSync room %q", msg.Nickname, msg.Room)
-			conn.Send(mwproto.ReadyDenyMessage{Description: "ItemSync not supported on this server"})
-			continue
+			isID, err = index.FindISRoom(msg.Room)
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			serveItemSyncSetup(conn, workdir, isnf, isID, msg)
+			return
 		case mwproto.JoinMessage:
-			randoID = indexfile.RandoID(msg.RandoID)
+			mwID = indexfile.MWRandoID(msg.RandoID)
 			playerID = mwfile.PlayerID(msg.PlayerID)
-			mw, err = openMW(workdir, randoID)
+			mw, err = openMW(workdir, mwID)
 			if err != nil {
 				log.Println(err)
 				return
@@ -192,9 +198,9 @@ waitingForReadyOrJoin:
 				return
 			}
 			if isShuffled {
-				serveClientInGame(conn, mw, nf, randoID, playerID)
+				serveClientInGame(conn, mw, nf, mwID, playerID)
 			} else {
-				log.Printf("rando %d isn't shuffled yet", randoID)
+				log.Printf("rando %d isn't shuffled yet", mwID)
 			}
 			return
 		default:
@@ -202,17 +208,17 @@ waitingForReadyOrJoin:
 		}
 	}
 
-	log.Printf("room ID = %d; player ID = %d", randoID, playerID)
+	log.Printf("room ID = %d; player ID = %d", mwID, playerID)
 
 	// There is a tiny window from Join to here where a shuffle notification from
 	// another goroutine would be lost, but the room wasn't shuffled yet when we checked
 	// so we're stuck waiting.
 	// In the very unlikely event this happens, the client can disconnect and reconnect
 	// to resolve the issue.
-	nf.shuffleTopic.Listen(randoID, shuffleNotifications)
-	defer nf.shuffleTopic.Mute(randoID, shuffleNotifications)
-	nf.playerChangeTopic.Listen(randoID, playerChangeNotifications)
-	defer nf.playerChangeTopic.Mute(randoID, playerChangeNotifications)
+	nf.shuffleTopic.Listen(mwID, shuffleNotifications)
+	defer nf.shuffleTopic.Mute(mwID, shuffleNotifications)
+	nf.playerChangeTopic.Listen(mwID, playerChangeNotifications)
+	defer nf.playerChangeTopic.Mute(mwID, playerChangeNotifications)
 
 	var attachedRando *mwproto.RandoGeneratedMessage
 
@@ -231,7 +237,7 @@ waitingForReadyOrJoin:
 					return
 				}
 				if isShuffled {
-					err = sendRandoResult(conn, mw, randoID, playerID, msg)
+					err = sendRandoResult(conn, mw, mwID, playerID, msg)
 				} else {
 					err = mw.Attach(playerID, msg)
 				}
@@ -254,7 +260,7 @@ waitingForReadyOrJoin:
 					log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
 					continue
 				}
-				serveClientInGame(conn, mw, nf, randoID, playerID)
+				serveClientInGame(conn, mw, nf, mwID, playerID)
 				return
 			default:
 				log.Printf("unexpected message (in room) from %s: %#v", conn.RemoteAddr(), msg)
@@ -263,7 +269,7 @@ waitingForReadyOrJoin:
 			if attachedRando == nil {
 				continue
 			}
-			if err := sendRandoResult(conn, mw, randoID, playerID, *attachedRando); err != nil {
+			if err := sendRandoResult(conn, mw, mwID, playerID, *attachedRando); err != nil {
 				log.Println(err)
 				return
 			}
@@ -285,7 +291,7 @@ func readyConfirm(names []string) mwproto.ReadyConfirmMessage {
 	}
 }
 
-func sendRandoResult(conn *mwproto.ServerConn, mw *mwfile.File, randoID indexfile.RandoID, playerID mwfile.PlayerID, currentRando mwproto.RandoGeneratedMessage) error {
+func sendRandoResult(conn *mwproto.ServerConn, mw *mwfile.File, randoID indexfile.MWRandoID, playerID mwfile.PlayerID, currentRando mwproto.RandoGeneratedMessage) error {
 	result, err := mw.GetShuffleResult(playerID)
 	if err != nil {
 		return err
@@ -303,7 +309,7 @@ func sendRandoResult(conn *mwproto.ServerConn, mw *mwfile.File, randoID indexfil
 	return nil
 }
 
-func serveClientInGame(conn *mwproto.ServerConn, mw *mwfile.File, nf *notifier, randoID indexfile.RandoID, playerID mwfile.PlayerID) {
+func serveClientInGame(conn *mwproto.ServerConn, mw *mwfile.File, nf *notifier, randoID indexfile.MWRandoID, playerID mwfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
 
 	itemNotifications := make(chan struct{}, 1)

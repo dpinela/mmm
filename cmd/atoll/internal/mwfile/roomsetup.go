@@ -47,7 +47,7 @@ func (f *File) Join(nickname string) (playerID PlayerID, playerNames []string, e
 			return err
 		}
 
-		playerNames, err = f.PlayerNames()
+		playerNames, err = f.playerNames()
 		return err
 	})
 	return
@@ -78,6 +78,14 @@ func (f *File) Unjoin(playerID PlayerID) error {
 }
 
 func (f *File) PlayerNames() (playerNames []string, err error) {
+	err = sqlitex.RetryWhileBusy(func() error {
+		playerNames, err = f.playerNames()
+		return err
+	})
+	return
+}
+
+func (f *File) playerNames() (playerNames []string, err error) {
 	stmt := f.db.PrepareTemp("SELECT nickname FROM mw_players ORDER BY player_id")
 	defer stmt.Close()
 	err = sqlitex.StepAll(stmt, func() {

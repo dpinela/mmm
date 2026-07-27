@@ -55,7 +55,7 @@ func createRoom(w http.ResponseWriter, req *http.Request, workdir string) {
 	}
 	defer index.Close()
 
-	id, name, err := index.CreateRoom()
+	id, name, err := index.CreateMWRoom()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -76,7 +76,7 @@ type room struct {
 	Players  []mwfile.Player
 }
 
-func openMWByName(workdir, name string) (indexfile.RandoID, *mwfile.File, error) {
+func openMWByName(workdir, name string) (indexfile.MWRandoID, *mwfile.File, error) {
 	index, err := openIndex(workdir)
 	if err != nil {
 		return 0, nil, err
@@ -129,7 +129,7 @@ func displayRoom(w http.ResponseWriter, req *http.Request, workdir string) {
 	}
 }
 
-func handleRoomOp(w http.ResponseWriter, req *http.Request, workdir string, handler func(string, indexfile.RandoID, *mwfile.File)) {
+func handleRoomOp(w http.ResponseWriter, req *http.Request, workdir string, handler func(string, indexfile.MWRandoID, *mwfile.File)) {
 	if err := req.ParseForm(); err != nil {
 		http.Error(w, err.Error(), 400)
 		return
@@ -151,13 +151,13 @@ func handleRoomOp(w http.ResponseWriter, req *http.Request, workdir string, hand
 }
 
 func shuffleRoom(w http.ResponseWriter, req *http.Request, workdir string, nf *notifier) {
-	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.RandoID, mw *mwfile.File) {
+	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.MWRandoID, mw *mwfile.File) {
 		if err := mw.Shuffle(); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 
-		nf.shuffleTopic.Notify(indexfile.RandoID(randoID))
+		nf.shuffleTopic.Notify(indexfile.MWRandoID(randoID))
 
 		log.Println("rando generated for room", randoID)
 
@@ -166,7 +166,7 @@ func shuffleRoom(w http.ResponseWriter, req *http.Request, workdir string, nf *n
 }
 
 func unjoinPlayer(w http.ResponseWriter, req *http.Request, workdir string, nf *notifier) {
-	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.RandoID, mw *mwfile.File) {
+	handleRoomOp(w, req, workdir, func(roomName string, randoID indexfile.MWRandoID, mw *mwfile.File) {
 		rawPlayerID := req.FormValue("playerID")
 		playerID, err := strconv.ParseInt(rawPlayerID, 10, 64)
 		if err != nil {
@@ -186,7 +186,7 @@ func unjoinPlayer(w http.ResponseWriter, req *http.Request, workdir string, nf *
 		}
 
 		log.Printf("room %d, player %d deleted", randoID, playerID)
-		nf.playerChangeTopic.Notify(indexfile.RandoID(randoID))
+		nf.playerChangeTopic.Notify(indexfile.MWRandoID(randoID))
 		http.Redirect(w, req, "/rooms/"+roomName, http.StatusSeeOther)
 	})
 }

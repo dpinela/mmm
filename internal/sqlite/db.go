@@ -229,6 +229,7 @@ func errorFromCode(code C.int) error {
 }
 
 const (
+	ErrConstraint       = sqliteError(C.SQLITE_CONSTRAINT)
 	ErrConstraintUnique = sqliteError(C.SQLITE_CONSTRAINT_UNIQUE)
 	ErrCantOpen         = sqliteError(C.SQLITE_CANTOPEN)
 	ErrBusy             = sqliteError(C.SQLITE_BUSY)
