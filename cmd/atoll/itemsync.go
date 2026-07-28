@@ -53,6 +53,8 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 	nf.playerChangeTopic.Listen(randoID, playersCh)
 	defer nf.playerChangeTopic.Mute(randoID, playersCh)
 
+	log.Println("player names:", playerNames)
+
 	conn.Send(readyConfirm(playerNames))
 
 	settings, err := isync.GetGlobalSettings()
@@ -61,7 +63,23 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 		return
 	}
 	if settings != nil {
+		log.Println("existing settings found")
 		conn.Send(mwproto.InitiateSyncGameMessage{Settings: settings})
+		playerNames, metadata, err := isync.GetFinalPlayers()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+		log.Println("new player names:", playerNames)
+		log.Println("metadata:", metadata)
+		conn.Send(mwproto.ResultMessage{
+			PlayerID:              int32(playerID),
+			RandoID:               int32(randoID),
+			Nicknames:             playerNames,
+			ReadyMetadata:         metadata,
+			Placements:            map[string][]mwproto.ResultPlacement{},
+			PlayerItemsPlacements: map[string]string{},
+		})
 	}
 
 	weSentSettings := false
@@ -100,8 +118,21 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 				continue
 			}
 			if !weSentSettings {
-				conn.Send(mwproto.ApplySettingsMessage{Settings: settings})
+				conn.Send(mwproto.InitiateSyncGameMessage{Settings: settings})
 			}
+			playerNames, metadata, err := isync.GetFinalPlayers()
+			if err != nil {
+				log.Println(err)
+				return
+			}
+			conn.Send(mwproto.ResultMessage{
+				PlayerID:              int32(playerID),
+				RandoID:               int32(randoID),
+				Nicknames:             playerNames,
+				ReadyMetadata:         metadata,
+				Placements:            map[string][]mwproto.ResultPlacement{},
+				PlayerItemsPlacements: map[string]string{},
+			})
 		case <-playersCh:
 			playerNames, err := isync.PlayerNames()
 			if err != nil {

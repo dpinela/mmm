@@ -39,6 +39,8 @@ func (f *File) Join(nickname string, hash int, metadata []mwproto.KeyValuePair) 
 			if existingHash != hash {
 				return HashMismatchError{existingHash, hash}
 			}
+			playerNames, err = f.playerNames()
+			return err
 		default:
 			return err
 		}
@@ -109,7 +111,7 @@ func (f *File) GetGlobalSettings() (settings map[string]json.RawMessage, err err
 		stmt = f.db.PrepareTemp("SELECT key, value FROM is_settings")
 		defer stmt.Close()
 		settings = map[string]json.RawMessage{}
-		err = sqlitex.StepOnce(stmt, func() {
+		err = sqlitex.StepAll(stmt, func() {
 			settings[stmt.ReadString(0)] = stmt.ReadBytes(1)
 		})
 		if err == sqlitex.ErrZeroRows {
@@ -151,6 +153,33 @@ func (f *File) PlayerNames() (playerNames []string, err error) {
 	err = sqlitex.RetryWhileBusy(func() error {
 		playerNames, err = f.playerNames()
 		return err
+	})
+	return
+}
+
+func (f *File) GetFinalPlayers() (nicknames []string, readyMetadata [][]mwproto.KeyValuePair, err error) {
+	err = sqlitex.Transaction(f.db, func() error {
+		nicknames, err = f.playerNames()
+		if err != nil {
+			return err
+		}
+		readyMetadata = make([][]mwproto.KeyValuePair, len(nicknames))
+
+		for i := range readyMetadata {
+			// We must not return a nil slice here as it will be returned
+			// verbatim to MW clients.
+			readyMetadata[i] = []mwproto.KeyValuePair{}
+		}
+
+		stmt := f.db.PrepareTemp("SELECT player_id, key, value FROM is_ready_metadata ORDER BY player_id, index_")
+		defer stmt.Close()
+		return sqlitex.StepAll(stmt, func() {
+			playerID := stmt.ReadInt64(0)
+			readyMetadata[playerID] = append(readyMetadata[playerID], mwproto.KeyValuePair{
+				Key:   stmt.ReadString(1),
+				Value: stmt.ReadString(2),
+			})
+		})
 	})
 	return
 }
