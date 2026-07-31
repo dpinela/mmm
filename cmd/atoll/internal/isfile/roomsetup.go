@@ -39,8 +39,6 @@ func (f *File) Join(nickname string, hash int, metadata []mwproto.KeyValuePair) 
 			if existingHash != hash {
 				return HashMismatchError{existingHash, hash}
 			}
-			playerNames, err = f.playerNames()
-			return err
 		default:
 			return err
 		}
@@ -51,13 +49,23 @@ func (f *File) Join(nickname string, hash int, metadata []mwproto.KeyValuePair) 
 		err = sqlitex.StepOnce(stmt, func() {
 			playerID = PlayerID(stmt.ReadInt64(0))
 		})
-		if err != sqlitex.ErrZeroRows {
+		if err == sqlitex.ErrZeroRows {
+			stmt = f.db.PrepareTemp("INSERT INTO is_players (player_id, nickname) VALUES ((SELECT COUNT(*) FROM is_players), ?) RETURNING player_id")
+			defer stmt.Close()
+			stmt.BindString(1, nickname)
+			err = sqlitex.StepOnce(stmt, func() {
+				playerID = PlayerID(stmt.ReadInt64(0))
+			})
+			if err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 
-		stmt = f.db.PrepareTemp("INSERT INTO is_players (player_id, nickname) VALUES ((SELECT COUNT(*) FROM is_players), ?)")
+		stmt = f.db.PrepareTemp("DELETE FROM is_ready_metadata WHERE player_id = ?")
 		defer stmt.Close()
-		stmt.BindString(1, nickname)
+		stmt.BindInt64(1, int64(playerID))
 		if err = stmt.Exec(); err != nil {
 			return err
 		}

@@ -11,6 +11,7 @@ import (
 	"strconv"
 
 	"github.com/dpinela/mmm/cmd/atoll/internal/indexfile"
+	"github.com/dpinela/mmm/cmd/atoll/internal/isfile"
 	"github.com/dpinela/mmm/cmd/atoll/internal/mwfile"
 	"github.com/dpinela/mmm/internal/mwproto"
 	"github.com/dpinela/mmm/internal/sqlite"
@@ -184,6 +185,40 @@ waitingForReadyOrJoin:
 			serveItemSyncSetup(conn, workdir, isnf, isID, msg)
 			return
 		case mwproto.JoinMessage:
+			switch msg.Mode {
+			case mwproto.JoinModeMW:
+				mwID = indexfile.MWRandoID(msg.RandoID)
+				playerID = mwfile.PlayerID(msg.PlayerID)
+				mw, err = openMW(workdir, mwID)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				defer mw.Close()
+				isShuffled, err := mw.IsShuffled()
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				if isShuffled {
+					serveClientInGame(conn, mw, nf, mwID, playerID)
+				} else {
+					log.Printf("rando %d isn't shuffled yet", mwID)
+				}
+			case mwproto.JoinModeIS:
+				isID = indexfile.ISRandoID(msg.RandoID)
+				isyncPlayerID := isfile.PlayerID(msg.PlayerID)
+				isync, err := openIS(workdir, isID)
+				if err != nil {
+					log.Println(err)
+					return
+				}
+				defer isync.Close()
+				serveISClientInGame(conn, isync, isnf, isID, isyncPlayerID)
+				return
+			default:
+				log.Printf("player %d (%q) tried to join rando %d in unknown mode %d", msg.PlayerID, msg.DisplayName, msg.RandoID, msg.Mode)
+			}
 			mwID = indexfile.MWRandoID(msg.RandoID)
 			playerID = mwfile.PlayerID(msg.PlayerID)
 			mw, err = openMW(workdir, mwID)

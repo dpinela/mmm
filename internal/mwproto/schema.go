@@ -72,12 +72,19 @@ type JoinMessage struct {
 	DisplayName string
 	RandoID     int32
 	PlayerID    int32
-	Mode        byte
+	Mode        JoinMode
 }
 
 func (JoinMessage) msgType() messageType {
 	return typeJoin
 }
+
+type JoinMode byte
+
+const (
+	JoinModeMW JoinMode = iota
+	JoinModeIS
+)
 
 type JoinConfirmMessage struct {
 }
@@ -248,6 +255,8 @@ type SaveMessage struct{}
 func (SaveMessage) msgType() messageType {
 	return typeSave
 }
+
+const BroadcastPlayerID int32 = -2
 
 type DataSendMessage struct {
 	Label   string
