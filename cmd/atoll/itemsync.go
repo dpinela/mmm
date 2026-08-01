@@ -21,38 +21,38 @@ func isyncPath(workdir string, randoID indexfile.ISRandoID) string {
 	return filepath.Join(workdir, strconv.FormatInt(int64(randoID), 10)+".atollis")
 }
 
-func openIS(workdir string, randoID indexfile.ISRandoID) (*isfile.File, error) {
-	return isfile.Open(isyncPath(workdir, randoID))
+func (srv *server) openIS(randoID indexfile.ISRandoID) (*isfile.File, error) {
+	return isfile.Open(isyncPath(srv.workdir, randoID))
 }
 
-func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotifier, randoID indexfile.ISRandoID, readyMsg mwproto.ItemSyncReadyMessage) {
-	isync, err := openIS(workdir, randoID)
+func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfile.ISRandoID, readyMsg mwproto.ItemSyncReadyMessage) bool {
+	isync, err := srv.openIS(randoID)
 	if err != nil {
 		log.Println(err)
-		return
+		return false
 	}
 	defer isync.Close()
 
 	playerID, playerNames, err := isync.Join(readyMsg.Nickname, int(readyMsg.Hash), readyMsg.ReadyMetadata)
 	if m, isBadHash := err.(isfile.HashMismatchError); isBadHash {
 		conn.Send(mwproto.ReadyDenyMessage{Description: m.Error()})
-		return
+		return true
 	}
 	if err != nil {
 		log.Println(err)
-		return
+		return false
 	}
 
 	initiateCh := make(chan struct{}, 1)
 	playersCh := make(chan struct{}, 1)
 
-	nf.initiateTopic.Listen(randoID, initiateCh)
-	defer nf.initiateTopic.Mute(randoID, initiateCh)
+	srv.isyncNotifier.initiateTopic.Listen(randoID, initiateCh)
+	defer srv.isyncNotifier.initiateTopic.Mute(randoID, initiateCh)
 
 	// so we don't get a notification looped back to us
-	nf.playerChangeTopic.Notify(randoID)
-	nf.playerChangeTopic.Listen(randoID, playersCh)
-	defer nf.playerChangeTopic.Mute(randoID, playersCh)
+	srv.isyncNotifier.playerChangeTopic.Notify(randoID)
+	srv.isyncNotifier.playerChangeTopic.Listen(randoID, playersCh)
+	defer srv.isyncNotifier.playerChangeTopic.Mute(randoID, playersCh)
 
 	log.Println("player names:", playerNames)
 
@@ -61,7 +61,7 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 	settings, err := isync.GetGlobalSettings()
 	if err != nil {
 		log.Println(err)
-		return
+		return false
 	}
 	if settings != nil {
 		log.Println("existing settings found")
@@ -69,7 +69,7 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 		playerNames, metadata, err := isync.GetFinalPlayers()
 		if err != nil {
 			log.Println(err)
-			return
+			return false
 		}
 		log.Println("new player names:", playerNames)
 		log.Println("metadata:", metadata)
@@ -89,7 +89,7 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 		select {
 		case msg, ok := <-conn.Inbox():
 			if !ok {
-				return
+				return false
 			}
 			switch msg := msg.(type) {
 			case mwproto.JoinMessage:
@@ -97,24 +97,25 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 					log.Printf("inconsistent Join: %+v", msg)
 					continue
 				}
-				serveISClientInGame(conn, isync, nf, randoID, playerID)
-				return
+				srv.serveItemSyncGame(conn, isync, randoID, playerID)
+				return false
 			case mwproto.InitiateSyncGameMessage:
 				if err := isync.SetGlobalSettings(msg.Settings); err != nil {
 					log.Println(err)
-					return
+					return false
 				}
 				weSentSettings = true
-				nf.initiateTopic.Notify(randoID)
+				srv.isyncNotifier.initiateTopic.Notify(randoID)
 			case mwproto.UnreadyMessage:
 				if err := isync.Unjoin(playerID); err != nil {
 					log.Println(err)
-					return
+					return false
 				}
+				return true
 			case mwproto.RequestSettingsMessage, mwproto.ApplySettingsMessage:
 				// expected, but useless; catch here so they don't pollute the log
 			case mwproto.DisconnectMessage:
-				return
+				return false
 			default:
 				log.Printf("unexpected message (in IS room setup): %#v", msg)
 			}
@@ -125,11 +126,11 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 			settings, err := isync.GetGlobalSettings()
 			if err != nil {
 				log.Println(err)
-				return
+				return false
 			}
 			if settings == nil {
 				log.Println("not having settings is impossible at this point")
-				continue
+				return false
 			}
 			if !weSentSettings {
 				conn.Send(mwproto.InitiateSyncGameMessage{Settings: settings})
@@ -137,7 +138,7 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 			playerNames, metadata, err := isync.GetFinalPlayers()
 			if err != nil {
 				log.Println(err)
-				return
+				return false
 			}
 			conn.Send(mwproto.ResultMessage{
 				PlayerID:              int32(playerID),
@@ -151,19 +152,19 @@ func serveItemSyncSetup(conn *mwproto.ServerConn, workdir string, nf *isyncNotif
 			playerNames, err := isync.PlayerNames()
 			if err != nil {
 				log.Println(err)
-				return
+				return false
 			}
 			conn.Send(readyConfirm(playerNames))
 		}
 	}
 }
 
-func serveISClientInGame(conn *mwproto.ServerConn, isync *isfile.File, nf *isyncNotifier, randoID indexfile.ISRandoID, playerID isfile.PlayerID) {
+func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.File, randoID indexfile.ISRandoID, playerID isfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
 
 	itemNotifications := make(chan struct{}, 1)
-	nf.itemTopic.Listen(randoID, itemNotifications)
-	defer nf.itemTopic.Mute(randoID, itemNotifications)
+	srv.isyncNotifier.itemTopic.Listen(randoID, itemNotifications)
+	defer srv.isyncNotifier.itemTopic.Mute(randoID, itemNotifications)
 
 	unsavedItems, err := isync.GetUnsavedItems(playerID)
 	if err != nil {
@@ -201,7 +202,7 @@ func serveISClientInGame(conn *mwproto.ServerConn, isync *isfile.File, nf *isync
 					Content: msg.Content,
 					To:      msg.To,
 				})
-				nf.itemTopic.Notify(randoID)
+				srv.isyncNotifier.itemTopic.Notify(randoID)
 			case mwproto.DataReceiveConfirmMessage:
 				if err := isync.ConfirmItem(playerID, msg); err != nil {
 					log.Println(err)
