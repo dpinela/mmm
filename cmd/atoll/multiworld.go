@@ -8,8 +8,8 @@ import (
 
 	"github.com/dpinela/mmm/cmd/atoll/internal/indexfile"
 	"github.com/dpinela/mmm/cmd/atoll/internal/mwfile"
+	"github.com/dpinela/mmm/cmd/atoll/internal/ping"
 	"github.com/dpinela/mmm/internal/mwproto"
-	"github.com/dpinela/mmm/internal/ping"
 )
 
 type mwNotifier struct {
@@ -44,20 +44,15 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 
 	log.Printf("room ID = %d; player ID = %d", mwID, playerID)
 
-	// More than one pending notification is redundant anyway. The sending side will drop
-	// redundant ones automatically.
-	shuffleNotifications := make(chan struct{}, 1)
-	playerChangeNotifications := make(chan struct{}, 1)
-
 	// There is a tiny window from Join to here where a shuffle notification from
 	// another goroutine would be lost, but the room wasn't shuffled yet when we checked
 	// so we're stuck waiting.
 	// In the very unlikely event this happens, the client can disconnect and reconnect
 	// to resolve the issue.
-	srv.mwNotifier.shuffleTopic.Listen(mwID, shuffleNotifications)
-	defer srv.mwNotifier.shuffleTopic.Mute(mwID, shuffleNotifications)
-	srv.mwNotifier.playerChangeTopic.Listen(mwID, playerChangeNotifications)
-	defer srv.mwNotifier.playerChangeTopic.Mute(mwID, playerChangeNotifications)
+	shuffleNotifications, cancel := srv.mwNotifier.shuffleTopic.Listen(mwID)
+	defer cancel()
+	playerChangeNotifications, cancel := srv.mwNotifier.playerChangeTopic.Listen(mwID)
+	defer cancel()
 
 	var attachedRando *mwproto.RandoGeneratedMessage
 
@@ -126,14 +121,11 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File, randoID indexfile.MWRandoID, playerID mwfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
 
-	itemNotifications := make(chan struct{}, 1)
 	sid := subscriberID{playerID: int64(playerID), randoID: randoID}
-	srv.mwNotifier.itemTopic.Listen(sid, itemNotifications)
-	defer srv.mwNotifier.itemTopic.Mute(sid, itemNotifications)
-
-	notchCostNotifications := make(chan struct{}, 1)
-	srv.mwNotifier.notchCostTopic.Listen(randoID, notchCostNotifications)
-	defer srv.mwNotifier.notchCostTopic.Mute(randoID, notchCostNotifications)
+	itemNotifications, cancel := srv.mwNotifier.itemTopic.Listen(sid)
+	defer cancel()
+	notchCostNotifications, cancel := srv.mwNotifier.notchCostTopic.Listen(randoID)
+	defer cancel()
 
 	pendingItems, err := mw.GetUnsavedItems(playerID)
 	if err != nil {

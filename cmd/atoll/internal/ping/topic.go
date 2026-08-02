@@ -17,16 +17,20 @@ type Topic[Key comparable] struct {
 	subscribers map[Key][]chan<- struct{}
 }
 
-func (t *Topic[Key]) Listen(k Key, ch chan<- struct{}) {
+func (t *Topic[Key]) Listen(k Key) (events <-chan struct{}, cancel func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// More than one pending notification is redundant anyway. Notify will drop
+	// redundant ones automatically.
+	ch := make(chan struct{}, 1)
 	if t.subscribers == nil {
 		t.subscribers = map[Key][]chan<- struct{}{}
 	}
 	t.subscribers[k] = append(t.subscribers[k], ch)
+	return ch, func() { t.mute(k, ch) }
 }
 
-func (t *Topic[Key]) Mute(k Key, ch chan<- struct{}) {
+func (t *Topic[Key]) mute(k Key, ch chan<- struct{}) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 

@@ -7,8 +7,8 @@ import (
 
 	"github.com/dpinela/mmm/cmd/atoll/internal/indexfile"
 	"github.com/dpinela/mmm/cmd/atoll/internal/isfile"
+	"github.com/dpinela/mmm/cmd/atoll/internal/ping"
 	"github.com/dpinela/mmm/internal/mwproto"
-	"github.com/dpinela/mmm/internal/ping"
 )
 
 type isyncNotifier struct {
@@ -43,16 +43,13 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 		return false
 	}
 
-	initiateCh := make(chan struct{}, 1)
-	playersCh := make(chan struct{}, 1)
-
-	srv.isyncNotifier.initiateTopic.Listen(randoID, initiateCh)
-	defer srv.isyncNotifier.initiateTopic.Mute(randoID, initiateCh)
+	initiateCh, cancel := srv.isyncNotifier.initiateTopic.Listen(randoID)
+	defer cancel()
 
 	// so we don't get a notification looped back to us
 	srv.isyncNotifier.playerChangeTopic.Notify(randoID)
-	srv.isyncNotifier.playerChangeTopic.Listen(randoID, playersCh)
-	defer srv.isyncNotifier.playerChangeTopic.Mute(randoID, playersCh)
+	playersCh, cancel := srv.isyncNotifier.playerChangeTopic.Listen(randoID)
+	defer cancel()
 
 	log.Println("player names:", playerNames)
 
@@ -162,9 +159,8 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.File, randoID indexfile.ISRandoID, playerID isfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
 
-	itemNotifications := make(chan struct{}, 1)
-	srv.isyncNotifier.itemTopic.Listen(randoID, itemNotifications)
-	defer srv.isyncNotifier.itemTopic.Mute(randoID, itemNotifications)
+	itemNotifications, cancel := srv.isyncNotifier.itemTopic.Listen(randoID)
+	defer cancel()
 
 	unsavedItems, err := isync.GetUnsavedItems(playerID)
 	if err != nil {
