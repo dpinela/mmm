@@ -79,6 +79,7 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 					log.Println(err)
 					return false
 				}
+				attachedRando = &msg
 			case mwproto.DisconnectMessage:
 				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return false
