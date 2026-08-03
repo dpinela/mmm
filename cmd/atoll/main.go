@@ -212,25 +212,6 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 			default:
 				log.Printf("player %d (%q) tried to join rando %d in unknown mode %d", msg.PlayerID, msg.DisplayName, msg.RandoID, msg.Mode)
 			}
-			mwID = indexfile.MWRandoID(msg.RandoID)
-			playerID = mwfile.PlayerID(msg.PlayerID)
-			mw, err = srv.openMW(mwID)
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			defer mw.Close()
-			isShuffled, err := mw.IsShuffled()
-			if err != nil {
-				log.Println(err)
-				return
-			}
-			if isShuffled {
-				srv.serveMultiworldGame(conn, mw, mwID, playerID)
-			} else {
-				log.Printf("rando %d isn't shuffled yet", mwID)
-			}
-			return
 		default:
 			log.Printf("unexpected message (awaiting ready) from %s: %#v", conn.RemoteAddr(), msg)
 		}
