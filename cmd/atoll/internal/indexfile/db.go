@@ -2,7 +2,6 @@ package indexfile
 
 import (
 	"errors"
-	"log"
 
 	"github.com/dpinela/mmm/internal/sqlite"
 	"github.com/dpinela/mmm/internal/sqlitex"
@@ -81,9 +80,6 @@ func (f *File) FindISRoom(name string) (randoID ISRandoID, err error) {
 		err := sqlitex.StepOnce(stmt, func() {
 			randoID = ISRandoID(stmt.ReadInt64(0))
 		})
-		if err == nil {
-			log.Println("found:", name, "as", randoID)
-		}
 		if err != sqlitex.ErrZeroRows {
 			return err
 		}

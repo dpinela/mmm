@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -79,7 +79,7 @@ func (srv *server) serveClients() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Println(err)
+			slog.Error(err.Error())
 			continue
 		}
 		go srv.serveClient(conn)
@@ -93,12 +93,18 @@ func (srv *server) openIndex() (*indexfile.File, error) {
 func (srv *server) serveClient(conn *mwproto.ServerConn) {
 	defer conn.Close()
 
+	logger := slog.Default().With(slog.String("conn", fmt.Sprintf("%p", conn)))
+
+	logger.Info("accepted connection")
+
 	index, err := srv.openIndex()
 	if err != nil {
-		log.Println("open index database:", err)
+		logger.Error(err.Error(), slog.String("op", "open index database"))
 		return
 	}
 	defer index.Close()
+
+	logger.Info("waiting for Connect")
 
 	for {
 		msg, ok := <-conn.Inbox()
@@ -109,7 +115,7 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 			conn.Send(mwproto.ConnectMessage{ServerName: "Atoll"})
 			break
 		}
-		log.Printf("unexpected message (awaiting connection) from %s: %#v", conn.RemoteAddr(), msg)
+		logger.Info(fmt.Sprintf("unexpected message while waiting for connect: %#v", msg))
 	}
 
 	var (
@@ -117,6 +123,7 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 		mwID     indexfile.MWRandoID
 		isID     indexfile.ISRandoID
 		playerID mwfile.PlayerID
+		opLogger *slog.Logger
 	)
 
 	for {
@@ -126,22 +133,30 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 		}
 		switch msg := msg.(type) {
 		case mwproto.DisconnectMessage:
-			log.Printf("connection from %s terminated", conn.RemoteAddr())
+			logger.Info("client requested disconnection")
 			return
 		case mwproto.ReadyMessage:
+			opLogger = logger.With(logOp("Ready"))
 			if msg.Mode != 0 {
-				log.Printf("invalid room mode from %s: %d", conn.RemoteAddr(), msg.Mode)
+				opLogger.Info("invalid mode", slog.Int("modenum", int(msg.Mode)))
 				conn.Send(mwproto.ReadyDenyMessage{Description: "invalid room mode"})
 				continue
 			}
+
+			opLogger = opLogger.With(logMode("mw"))
+
+			roomNotExist := func() {
+				opLogger.Info("room does not exist", slog.String("room", msg.Room), slog.String("nickname", msg.Nickname))
+				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
+			}
+
 			mwID, err = index.FindRoom(msg.Room)
 			if err == indexfile.ErrRoomNotExist {
-				log.Printf("%q tried to access nonexistent room %q", msg.Nickname, msg.Room)
-				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
+				roomNotExist()
 				continue
 			}
 			if err != nil {
-				log.Println(err)
+				opLogger.Error(err.Error())
 				return
 			}
 
@@ -149,18 +164,17 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 			if errors.Is(err, sqlite.ErrCantOpen) {
 				// deleting the file effectively deletes the room
 				if err := index.DeleteRoom(mwID); err != nil {
-					log.Println(err)
+					opLogger.Warn(err.Error())
 				}
-				log.Printf("%q tried to access nonexistent room %q", msg.Nickname, msg.Room)
-				conn.Send(mwproto.ReadyDenyMessage{Description: "room does not exist"})
+				roomNotExist()
 				return
 			}
 			if err != nil {
-				log.Println(err)
+				opLogger.Error(err.Error())
 				return
 			}
 			defer mw.Close()
-			keepAlive := srv.serveMultiworldSetup(conn, mw, mwID, msg)
+			keepAlive := srv.serveMultiworldSetup(conn, logger, mw, mwID, msg)
 			if keepAlive {
 				continue
 			}
@@ -168,52 +182,56 @@ func (srv *server) serveClient(conn *mwproto.ServerConn) {
 		case mwproto.ItemSyncReadyMessage:
 			isID, err = index.FindISRoom(msg.Room)
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), logOp("ItemSyncReady"))
 				return
 			}
-			keepAlive := srv.serveItemSyncSetup(conn, isID, msg)
+			keepAlive := srv.serveItemSyncSetup(conn, logger, isID, msg)
 			if keepAlive {
 				continue
 			}
 			return
 		case mwproto.JoinMessage:
+			opLogger = logger.With(logOp("Join"))
 			switch msg.Mode {
 			case mwproto.JoinModeMW:
+				opLogger = opLogger.With(logMode("mw"))
 				mwID = indexfile.MWRandoID(msg.RandoID)
 				playerID = mwfile.PlayerID(msg.PlayerID)
 				mw, err = srv.openMW(mwID)
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					return
 				}
 				defer mw.Close()
 				isShuffled, err := mw.IsShuffled()
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					return
 				}
 				if isShuffled {
-					srv.serveMultiworldGame(conn, mw, mwID, playerID)
+					index.Close()
+					srv.serveMultiworldGame(conn, logger, mw, mwID, playerID)
 					return
 				} else {
-					log.Printf("rando %d isn't shuffled yet", mwID)
+					opLogger.Info("rando not shuffled yet", logRandoID(mwID))
 				}
 			case mwproto.JoinModeIS:
 				isID = indexfile.ISRandoID(msg.RandoID)
 				isyncPlayerID := isfile.PlayerID(msg.PlayerID)
 				isync, err := srv.openIS(isID)
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error(), logMode("is"), logPlayerID(isyncPlayerID), logRandoID(isID))
 					return
 				}
 				defer isync.Close()
-				srv.serveItemSyncGame(conn, isync, isID, isyncPlayerID)
+				index.Close()
+				srv.serveItemSyncGame(conn, logger, isync, isID, isyncPlayerID)
 				return
 			default:
-				log.Printf("player %d (%q) tried to join rando %d in unknown mode %d", msg.PlayerID, msg.DisplayName, msg.RandoID, msg.Mode)
+				opLogger.Info("unknown mode", slog.Int("modenum", int(msg.Mode)), slog.Int("playerID", int(msg.PlayerID)), slog.Int("randoID", int(msg.RandoID)))
 			}
 		default:
-			log.Printf("unexpected message (awaiting ready) from %s: %#v", conn.RemoteAddr(), msg)
+			logger.Info(fmt.Sprintf("unexpected message (awaiting ready): %#v", msg))
 		}
 	}
 }

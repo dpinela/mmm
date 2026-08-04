@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"log/slog"
 	"path/filepath"
 	"strconv"
 
@@ -25,10 +27,12 @@ func (srv *server) openIS(randoID indexfile.ISRandoID) (*isfile.File, error) {
 	return isfile.Open(isyncPath(srv.workdir, randoID))
 }
 
-func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfile.ISRandoID, readyMsg mwproto.ItemSyncReadyMessage) bool {
+func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, logger *slog.Logger, randoID indexfile.ISRandoID, readyMsg mwproto.ItemSyncReadyMessage) bool {
+	logger = logger.With(logRandoID(randoID), logMode("is"))
+	logger.Info("entered room setup")
 	isync, err := srv.openIS(randoID)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error())
 		return false
 	}
 	defer isync.Close()
@@ -39,9 +43,11 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 		return true
 	}
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error())
 		return false
 	}
+
+	logger = logger.With(logPlayerID(playerID))
 
 	initiateCh, cancel := srv.isyncNotifier.initiateTopic.Listen(randoID)
 	defer cancel()
@@ -51,25 +57,20 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 	playersCh, cancel := srv.isyncNotifier.playerChangeTopic.Listen(randoID)
 	defer cancel()
 
-	log.Println("player names:", playerNames)
-
 	conn.Send(readyConfirm(playerNames))
 
 	settings, err := isync.GetGlobalSettings()
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error())
 		return false
 	}
 	if settings != nil {
-		log.Println("existing settings found")
 		conn.Send(mwproto.InitiateSyncGameMessage{Settings: settings})
 		playerNames, metadata, err := isync.GetFinalPlayers()
 		if err != nil {
 			log.Println(err)
 			return false
 		}
-		log.Println("new player names:", playerNames)
-		log.Println("metadata:", metadata)
 		conn.Send(mwproto.ResultMessage{
 			PlayerID:              int32(playerID),
 			RandoID:               int32(randoID),
@@ -82,6 +83,8 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 
 	weSentSettings := false
 
+	var opLogger *slog.Logger
+
 	for {
 		select {
 		case msg, ok := <-conn.Inbox():
@@ -91,21 +94,21 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 			switch msg := msg.(type) {
 			case mwproto.JoinMessage:
 				if !(msg.Mode == mwproto.JoinModeIS && indexfile.ISRandoID(msg.RandoID) == randoID && isfile.PlayerID(msg.PlayerID) == playerID) {
-					log.Printf("inconsistent Join: %+v", msg)
+					logger.Info(fmt.Sprintf("inconsistent Join: %+v", msg), logOp("Join"))
 					continue
 				}
-				srv.serveItemSyncGame(conn, isync, randoID, playerID)
+				srv.serveItemSyncGame(conn, logger, isync, randoID, playerID)
 				return false
 			case mwproto.InitiateSyncGameMessage:
 				if err := isync.SetGlobalSettings(msg.Settings); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("InitiateSyncGame"))
 					return false
 				}
 				weSentSettings = true
 				srv.isyncNotifier.initiateTopic.Notify(randoID)
 			case mwproto.UnreadyMessage:
 				if err := isync.Unjoin(playerID); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("Unready"))
 					return false
 				}
 				return true
@@ -114,19 +117,20 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 			case mwproto.DisconnectMessage:
 				return false
 			default:
-				log.Printf("unexpected message (in IS room setup): %#v", msg)
+				logger.Info(fmt.Sprintf("unexpected message (in room setup): %#v", msg))
 			}
 		case <-initiateCh:
 			if playerID == 0 {
 				continue
 			}
+			opLogger = logger.With(logOp("_InitiateNotification"))
 			settings, err := isync.GetGlobalSettings()
 			if err != nil {
-				log.Println(err)
+				opLogger.Error(err.Error())
 				return false
 			}
 			if settings == nil {
-				log.Println("not having settings is impossible at this point")
+				opLogger.Error("not having settings is impossible at this point")
 				return false
 			}
 			if !weSentSettings {
@@ -134,7 +138,7 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 			}
 			playerNames, metadata, err := isync.GetFinalPlayers()
 			if err != nil {
-				log.Println(err)
+				opLogger.Error(err.Error())
 				return false
 			}
 			conn.Send(mwproto.ResultMessage{
@@ -148,7 +152,7 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 		case <-playersCh:
 			playerNames, err := isync.PlayerNames()
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), logOp("_PlayerChangeNotification"))
 				return false
 			}
 			conn.Send(readyConfirm(playerNames))
@@ -156,7 +160,7 @@ func (srv *server) serveItemSyncSetup(conn *mwproto.ServerConn, randoID indexfil
 	}
 }
 
-func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.File, randoID indexfile.ISRandoID, playerID isfile.PlayerID) {
+func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, logger *slog.Logger, isync *isfile.File, randoID indexfile.ISRandoID, playerID isfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
 
 	itemNotifications, cancel := srv.isyncNotifier.itemTopic.Listen(randoID)
@@ -164,13 +168,17 @@ func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.Fil
 
 	unsavedItems, err := isync.GetUnsavedItems(playerID)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error(), logOp("_GetUnsavedItems"))
 		return
 	}
+
+	logger.Info("joined")
 
 	for _, item := range unsavedItems {
 		conn.Send(item)
 	}
+
+	var opLogger *slog.Logger
 
 	for {
 		select {
@@ -180,8 +188,9 @@ func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.Fil
 			}
 			switch msg := msg.(type) {
 			case mwproto.DataSendMessage:
+				opLogger = logger.With(logOp("DataSend"))
 				if msg.To != mwproto.BroadcastPlayerID {
-					log.Printf("attempted to send item (%q, %q) to player %d; only broadcasts are allowed", msg.Label, msg.Content, msg.To)
+					opLogger.Info("invalid non-broadcast item", slog.String("label", msg.Label), slog.String("content", msg.Content), slog.Int("to", int(msg.To)))
 					continue
 				}
 				item := mwproto.Item{
@@ -190,7 +199,7 @@ func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.Fil
 					To:      msg.To,
 				}
 				if err := isync.SendItems(playerID, item); err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					continue
 				}
 				conn.Send(mwproto.DataSendConfirmMessage{
@@ -201,21 +210,21 @@ func (srv *server) serveItemSyncGame(conn *mwproto.ServerConn, isync *isfile.Fil
 				srv.isyncNotifier.itemTopic.Notify(randoID)
 			case mwproto.DataReceiveConfirmMessage:
 				if err := isync.ConfirmItem(playerID, msg); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("DataReceiveConfirm"))
 				}
 			case mwproto.SaveMessage:
 				if err := isync.SaveConfirmedItems(playerID); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("Save"))
 				}
 			case mwproto.DisconnectMessage:
 				return
 			default:
-				log.Printf("unexpected message (in IS gameplay): %#v", msg)
+				logger.Info(fmt.Sprintf("unexpected message (in game: %#v)", msg))
 			}
 		case <-itemNotifications:
 			items, err := isync.GetUnconfirmedItems(playerID)
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), logOp("_ItemNotification"))
 				continue
 			}
 			for _, item := range items {

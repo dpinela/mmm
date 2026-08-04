@@ -1,7 +1,8 @@
 package main
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -32,17 +33,21 @@ func (srv *server) openMW(randoID indexfile.MWRandoID) (*mwfile.File, error) {
 	return mwfile.Open(mwPath(srv.workdir, randoID))
 }
 
-func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.File, mwID indexfile.MWRandoID, msg mwproto.ReadyMessage) bool {
+func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, logger *slog.Logger, mw *mwfile.File, mwID indexfile.MWRandoID, msg mwproto.ReadyMessage) bool {
+	logger = logger.With(logMode("mw"), logRandoID(mwID))
+	logger.Info("entered room setup")
+
 	playerID, playerNames, err := mw.Join(msg.Nickname)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error(), logOp("Join"))
 		return false
 	}
+
+	logger = logger.With(logPlayerID(playerID))
+
 	srv.mwNotifier.playerChangeTopic.Notify(mwID)
 	conn.Send(readyConfirm(playerNames))
 	conn.Send(mwproto.RequestRandoMessage{})
-
-	log.Printf("room ID = %d; player ID = %d", mwID, playerID)
 
 	// There is a tiny window from Join to here where a shuffle notification from
 	// another goroutine would be lost, but the room wasn't shuffled yet when we checked
@@ -54,7 +59,10 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 	playerChangeNotifications, cancel := srv.mwNotifier.playerChangeTopic.Listen(mwID)
 	defer cancel()
 
-	var attachedRando *mwproto.RandoGeneratedMessage
+	var (
+		attachedRando *mwproto.RandoGeneratedMessage
+		opLogger      *slog.Logger
+	)
 
 	for {
 		select {
@@ -65,9 +73,10 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 
 			switch msg := msg.(type) {
 			case mwproto.RandoGeneratedMessage:
+				opLogger = logger.With(logOp("RandoGenerated"))
 				isShuffled, err := mw.IsShuffled()
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					return false
 				}
 				if isShuffled {
@@ -76,42 +85,47 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 					err = mw.Attach(playerID, msg)
 				}
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					return false
 				}
 				attachedRando = &msg
 			case mwproto.DisconnectMessage:
-				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return false
 			case mwproto.UnreadyMessage:
+				logger.Info("exited room setup")
 				return true
 			case mwproto.JoinMessage:
+				opLogger = logger.With(logOp("Join"))
 				isShuffled, err := mw.IsShuffled()
 				if err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					return false
 				}
-				if !isShuffled {
-					log.Printf("%s tried to access room %d, player %d: %v", conn.RemoteAddr(), msg.RandoID, msg.PlayerID, err)
+				if !(msg.Mode == mwproto.JoinModeIS && indexfile.MWRandoID(msg.RandoID) == mwID && mwfile.PlayerID(msg.PlayerID) == playerID) {
+					opLogger.Info(fmt.Sprintf("inconsistent Join: %+v", msg), logOp("Join"))
 					continue
 				}
-				srv.serveMultiworldGame(conn, mw, mwID, playerID)
+				if !isShuffled {
+					opLogger.Info("room is not shuffled")
+					continue
+				}
+				srv.serveMultiworldGame(conn, logger, mw, mwID, playerID)
 				return false
 			default:
-				log.Printf("unexpected message (in room) from %s: %#v", conn.RemoteAddr(), msg)
+				logger.Info(fmt.Sprintf("unexpected message (in room setup): %#v", msg))
 			}
 		case <-shuffleNotifications:
 			if attachedRando == nil {
 				continue
 			}
 			if err := sendRandoResult(conn, mw, mwID, playerID, *attachedRando); err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), logOp("_ShuffleNotification"))
 				return false
 			}
 		case <-playerChangeNotifications:
 			names, err := mw.PlayerNames()
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), logOp("_PlayerChangeNotification"))
 				return false
 			}
 			conn.Send(readyConfirm(names))
@@ -119,8 +133,9 @@ func (srv *server) serveMultiworldSetup(conn *mwproto.ServerConn, mw *mwfile.Fil
 	}
 }
 
-func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File, randoID indexfile.MWRandoID, playerID mwfile.PlayerID) {
+func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, logger *slog.Logger, mw *mwfile.File, randoID indexfile.MWRandoID, playerID mwfile.PlayerID) {
 	conn.Send(mwproto.JoinConfirmMessage{})
+	logger.Info("joined")
 
 	sid := subscriberID{playerID: int64(playerID), randoID: randoID}
 	itemNotifications, cancel := srv.mwNotifier.itemTopic.Listen(sid)
@@ -130,11 +145,11 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 
 	pendingItems, err := mw.GetUnsavedItems(playerID)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error(), logOp("_GetUnsavedItems"))
 		return
 	}
 
-	log.Printf("joined rando %d as player %d; sending %d unsaved items", randoID, playerID, len(pendingItems))
+	logger.Info(fmt.Sprintf("sending %d unsaved items", len(pendingItems)))
 
 	for _, item := range pendingItems {
 		conn.Send(item)
@@ -142,7 +157,7 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 
 	gotNotchCosts, err := mw.HasNotchCosts(playerID)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error(), logOp("_HasNotchCosts"))
 		return
 	}
 	if !gotNotchCosts {
@@ -151,13 +166,14 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 
 	othersCosts, err := mw.GetUnconfirmedNotchCosts(playerID)
 	if err != nil {
-		log.Println(err)
+		logger.Error(err.Error(), logOp("_GetUnconfirmedNotchCosts"))
 		return
 	}
 	for playerID, costs := range othersCosts {
-		log.Printf("rando %d, player %d: sending notch costs of player %d", randoID, playerID, playerID)
 		conn.Send(mwproto.AnnounceCharmNotchCostsMessage{PlayerID: int32(playerID), NotchCosts: costs})
 	}
+
+	var opLogger *slog.Logger
 
 	for {
 		select {
@@ -167,38 +183,37 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 			}
 			switch msg := msg.(type) {
 			case mwproto.AnnounceCharmNotchCostsMessage:
+				opLogger = logger.With(logOp("AnnounceCharmNotchCosts"))
 				if gotNotchCosts {
-					log.Printf("received duplicate notch costs for rando %d, player %d; ignoring", randoID, playerID)
+					opLogger.Info("received duplicate notch costs")
 					continue
 				}
 				if int64(msg.PlayerID) != int64(playerID) {
-					log.Printf("rando %d, player %d sent notch costs for a different player (%d); ignoring", randoID, playerID, msg.PlayerID)
+					opLogger.Info("sent notch costs for wrong player; ignoring", slog.Int64("otherPlayerID", int64(msg.PlayerID)))
 					continue
 				}
 				if err := mw.SaveNotchCosts(playerID, msg.NotchCosts); err != nil {
-					log.Println(err)
+					opLogger.Error(err.Error())
 					continue
 				}
-				log.Printf("received notch costs for rando %d, player %d", randoID, playerID)
 				// This notification will echo back to this goroutine as well, but that's harmless.
 				// (except it may cause a notch cost announcement to get duplicated)
 				srv.mwNotifier.notchCostTopic.Notify(randoID)
 			case mwproto.ConfirmCharmNotchCostsReceivedMessage:
-				log.Printf("rando %d, player %d confirmed notch costs of player %d", randoID, playerID, msg.PlayerID)
 				if err := mw.ConfirmNotchCosts(mwfile.PlayerID(msg.PlayerID), playerID); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("ConfirmCharmNotchCostsReceived"))
 					continue
 				}
 			case mwproto.DataSendMessage:
 				if err := mw.SendItems(playerID, mwproto.Item{To: msg.To, Label: msg.Label, Content: msg.Content}); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("DataSend"))
 					return
 				}
 				conn.Send(mwproto.DataSendConfirmMessage{Label: msg.Label, Content: msg.Content, To: msg.To})
 				srv.mwNotifier.itemTopic.Notify(subscriberID{randoID: randoID, playerID: int64(msg.To)})
 			case mwproto.DatasSendMessage:
 				if err := mw.SendItems(playerID, msg.Datas...); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("DatasSend"))
 					return
 				}
 				conn.Send(mwproto.DatasSendConfirmMessage{DatasCount: int32(len(msg.Datas))})
@@ -211,22 +226,21 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 				}
 			case mwproto.DataReceiveConfirmMessage:
 				if err := mw.ConfirmItem(playerID, msg); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("DataReceiveConfirm"))
 					return
 				}
 			case mwproto.SaveMessage:
 				if err := mw.SaveConfirmedItems(playerID); err != nil {
-					log.Println(err)
+					logger.Error(err.Error(), logOp("Save"))
 					return
 				}
 			case mwproto.DisconnectMessage:
-				log.Printf("connection from %s terminated", conn.RemoteAddr())
 				return
 			}
 		case <-itemNotifications:
 			items, err := mw.GetUnconfirmedItems(playerID)
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), "_ItemNotificaton")
 				return
 			}
 			for _, item := range items {
@@ -235,11 +249,10 @@ func (srv *server) serveMultiworldGame(conn *mwproto.ServerConn, mw *mwfile.File
 		case <-notchCostNotifications:
 			othersCosts, err := mw.GetUnconfirmedNotchCosts(playerID)
 			if err != nil {
-				log.Println(err)
+				logger.Error(err.Error(), "_NotchCostsNotification")
 				return
 			}
 			for playerID, costs := range othersCosts {
-				log.Printf("rando %d, player %d: sending notch costs of player %d", randoID, playerID, playerID)
 				conn.Send(mwproto.AnnounceCharmNotchCostsMessage{PlayerID: int32(playerID), NotchCosts: costs})
 			}
 		}
